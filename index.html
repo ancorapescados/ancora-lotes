@@ -636,11 +636,21 @@ async function doLogout() {
   await sb.auth.signOut();
 }
 
-// Check session immediately on load
+// Check session immediately on load — show login if no session within 3s
+const _authTimeout = setTimeout(() => {
+  const ov = document.getElementById('loadingOverlay');
+  if (ov && ov.style.display !== 'none') {
+    ov.style.display = 'none';
+    el('loginView').style.display = 'flex';
+  }
+}, 3000);
+
 (async () => {
   const { data: { session } } = await sb.auth.getSession();
   if (!session) {
-    showLoading(false);
+    clearTimeout(_authTimeout);
+    const ov = document.getElementById('loadingOverlay');
+    if (ov) ov.style.display = 'none';
     el('loginView').style.display = 'flex';
   }
 })();
@@ -655,6 +665,9 @@ sb.auth.onAuthStateChange(async (event, session) => {
     await loadData();
     showLoading(false);
     showDashboard();
+    // Force hide overlay
+    const ov = document.getElementById('loadingOverlay');
+    if (ov) ov.style.display = 'none';
   } else {
     currentUser = null;
     el('appView').style.display = 'none';
