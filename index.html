@@ -634,6 +634,15 @@ async function doLogout() {
   await sb.auth.signOut();
 }
 
+// Check session immediately on load
+(async () => {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) {
+    showLoading(false);
+    el('loginView').style.display = 'flex';
+  }
+})();
+
 sb.auth.onAuthStateChange(async (event, session) => {
   if (session?.user) {
     currentUser = session.user;
