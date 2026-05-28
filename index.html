@@ -651,23 +651,18 @@ const _authTimeout = setTimeout(() => {
 })();
 
 sb.auth.onAuthStateChange(async (event, session) => {
+  console.log('[auth] event:', event, 'user:', session?.user?.email);
   if (session?.user) {
     currentUser = session.user;
     el('userBadge').textContent = session.user.email;
     el('loginView').style.display = 'none';
     el('appView').style.display = 'block';
-    showLoading(true);
     await loadData();
-    showLoading(false);
-    showDashboard();
-    // Force hide overlay
-    const ov = document.getElementById('loadingOverlay');
-    if (ov) ov.style.display = 'none';
+    renderDashboard();
   } else {
     currentUser = null;
     el('appView').style.display = 'none';
     el('loginView').style.display = 'flex';
-    showLoading(false);
     lots = []; vendas = [];
   }
 });
@@ -675,24 +670,24 @@ sb.auth.onAuthStateChange(async (event, session) => {
 // ── DATA LOAD ─────────────────────────────────────────────────────────────────
 async function loadData() {
   console.log('[loadData] starting, user:', currentUser?.email);
+  const { data: { session } } = await sb.auth.getSession();
+  console.log('[loadData] session valid:', !!session?.access_token);
+  if (!session) { console.log('[loadData] no session'); return; }
   const { data: lotsData, error: lotsErr } = await sb.from('lots').select('*').order('created_at', { ascending: false });
-  console.log('[loadData] lots:', lotsData, 'error:', lotsErr);
+  console.log('[loadData] lots:', lotsData?.length, 'error:', lotsErr?.message);
   lots = lotsData || [];
-
   if (lots.length === 0) {
-    console.log('[loadData] no lots, seeding...');
     await seedInitialData();
     const { data: lotsData2 } = await sb.from('lots').select('*').order('created_at', { ascending: false });
     lots = lotsData2 || [];
-    console.log('[loadData] after seed:', lots.length);
   }
-
   const lotIds = lots.map(l => l.id);
   if (lotIds.length > 0) {
     const { data: vendasData, error: vendasErr } = await sb.from('vendas').select('*').in('lot_id', lotIds).order('created_at', { ascending: true });
-    console.log('[loadData] vendas:', vendasData?.length, 'error:', vendasErr);
+    console.log('[loadData] vendas:', vendasData?.length, 'error:', vendasErr?.message);
     vendas = vendasData || [];
   }
+  console.log('[loadData] done. lots:', lots.length, 'vendas:', vendas.length);
 }
 
 async function seedInitialData() {
