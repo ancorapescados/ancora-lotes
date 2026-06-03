@@ -657,7 +657,7 @@ sb.auth.onAuthStateChange(async (event, session) => {
     el('userBadge').textContent = session.user.email;
     el('loginView').style.display = 'none';
     el('appView').style.display = 'block';
-    await loadData();
+    await loadData(session);
     renderDashboard();
   } else {
     currentUser = null;
@@ -668,9 +668,12 @@ sb.auth.onAuthStateChange(async (event, session) => {
 });
 
 // ── DATA LOAD ─────────────────────────────────────────────────────────────────
-async function loadData() {
+async function loadData(session = null) {
   console.log('[loadData] starting, user:', currentUser?.email);
-  const { data: { session } } = await sb.auth.getSession();
+  if (!session) {
+    const { data } = await sb.auth.getSession();
+    session = data?.session;
+  }
   console.log('[loadData] session valid:', !!session?.access_token);
   if (!session) { console.log('[loadData] no session'); return; }
   const { data: lotsData, error: lotsErr } = await sb.from('lots').select('*').order('created_at', { ascending: false });
