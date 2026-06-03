@@ -678,6 +678,7 @@ async function loadData(session = null) {
   if (!session) { console.log('[loadData] no session'); return; }
   const { data: lotsData, error: lotsErr } = await sb.from('lots').select('*').order('created_at', { ascending: false });
   console.log('[loadData] lots:', lotsData?.length, 'error:', lotsErr?.message);
+  console.log('[loadData] lots raw:', JSON.stringify(lotsData), 'error raw:', JSON.stringify(lotsErr));
   lots = lotsData || [];
   if (lots.length === 0) {
     await seedInitialData();
