@@ -800,10 +800,11 @@ function peixesVendidos() {
 async function uploadFotoPeixe(file, lotId, lacre) {
   const ext = file.name.split('.').pop() || 'jpg';
   const path = `${lotId}/${lacre}_${Date.now()}.${ext}`;
+  console.log('[upload] tentando:', path, file.name, file.size);
   const { data, error } = await sb.storage.from('peixes-fotos').upload(path, file, {
     cacheControl: '3600', upsert: false
   });
-  if (error) { console.error('[upload foto] error:', error.message); return null; }
+  if (error) { console.error('[upload foto] error:', error.message); alert('Erro no upload da foto: ' + error.message); return null; }
   const { data: urlData } = sb.storage.from('peixes-fotos').getPublicUrl(path);
   return urlData.publicUrl;
 }
