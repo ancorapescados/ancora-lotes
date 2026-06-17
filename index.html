@@ -531,6 +531,8 @@ tr.highlight td { background:rgba(46,125,107,.08); }
             </div>
             <button class="btn-add" id="btn_add_venda" onclick="addVenda()">+ Registrar Venda</button>
           </div>
+          <button class="btn-novo-peixe" onclick="showNewPeixeModal()">+ Novo Peixe</button>
+          <div id="peixes_inventario"></div>
           <div class="section-label" style="margin-bottom:10px">Vendas Registradas</div>
           <div class="vendas-list" id="vendasList"><div class="empty-vendas">Nenhuma venda registrada</div></div>
         </div>
@@ -744,30 +746,284 @@ function getLotVendas(lotId) {
 function computeLot(lot) {
   const p = lot.params;
   const lv = getLotVendas(lot.id);
-  const custoTotal    = p.kgTotal * p.custoKg;
-  const recNecessaria = custoTotal / (1 - p.metaMC/100);
-  const mcNecessaria  = recNecessaria - custoTotal;
-  const kgVendidos    = lv.reduce((s,v)=>s+v.kg,0);
-  const recAcum       = lv.reduce((s,v)=>s+v.receita,0);
-  const mcAcum        = lv.reduce((s,v)=>s+v.mc,0);
-  const kgFrescos     = lv.filter(v=>!v.is_cong).reduce((s,v)=>s+v.kg,0);
-  const recFrescos    = lv.filter(v=>!v.is_cong).reduce((s,v)=>s+v.receita,0);
-  const kgRest        = Math.max(0, p.kgTotal - kgVendidos);
-  const custoRest     = kgRest * p.custoKg;
-  const progPct       = mcNecessaria > 0 ? Math.min(100,(mcAcum/mcNecessaria)*100) : 0;
-  const margemAtual   = recAcum > 0 ? (mcAcum/recAcum)*100 : 0;
-  const mcKgFresco    = kgFrescos > 0 ? (recFrescos - kgFrescos*p.custoKg)/kgFrescos : 0;
-  const mcFaltante    = Math.max(0, mcNecessaria - mcAcum);
-  const precoMinMeta  = kgRest > 0 ? (custoRest + mcFaltante)/kgRest : null;
-  const precoMinBE    = p.custoKg / (1 - p.metaMC/100);
-  const kgCongEfet    = kgRest * (1 - p.perdaCong/100);
-  const recCong       = kgCongEfet * p.precoCong;
-  const mcCong        = recCong - (kgRest * p.custoKg);
-  const mcFinalCong   = mcAcum + mcCong;
-  const recTotCong    = recAcum + recCong;
-  const mgFinalCong   = recTotCong > 0 ? (mcFinalCong/recTotCong)*100 : 0;
-  return { custoTotal,mcNecessaria,recNecessaria,kgVendidos,recAcum,mcAcum,kgFrescos,kgRest,progPct,margemAtual,mcKgFresco,mcFaltante,precoMinMeta,precoMinBE,kgCongEfet,recCong,mcCong,mcFinalCong,mgFinalCong };
+  const despesas       = lot.despesas_adicionais || 0;
+  const custoTotal     = p.kgTotal * p.custoKg;
+  const custoTotalComDesp = custoTotal + despesas;
+  const recNecessaria  = custoTotalComDesp / (1 - p.metaMC/100);
+  const mcNecessaria   = recNecessaria - custoTotalComDesp;
+  const kgVendidos     = lv.reduce((s,v)=>s+v.kg,0);
+  const recAcum        = lv.reduce((s,v)=>s+v.receita,0);
+  const mcAcumBruta    = lv.reduce((s,v)=>s+v.mc,0);
+  const mcAcum         = mcAcumBruta - despesas;
+  const kgFrescos      = lv.filter(v=>!v.is_cong).reduce((s,v)=>s+v.kg,0);
+  const recFrescos     = lv.filter(v=>!v.is_cong).reduce((s,v)=>s+v.receita,0);
+  const kgRest         = Math.max(0, p.kgTotal - kgVendidos);
+  const custoRest      = kgRest * p.custoKg;
+  const progPct        = mcNecessaria > 0 ? Math.min(100,(mcAcum/mcNecessaria)*100) : 0;
+  const margemAtual    = recAcum > 0 ? (mcAcum/recAcum)*100 : 0;
+  const mcKgFresco     = kgFrescos > 0 ? (recFrescos - kgFrescos*p.custoKg)/kgFrescos : 0;
+  // MC/kgD — penaliza congelamento, usa kg TOTAL do lote no denominador
+  const mcKgD          = p.kgTotal > 0 ? mcAcum / p.kgTotal : 0;
+  const mcFaltante     = Math.max(0, mcNecessaria - mcAcum);
+  const precoMinMeta   = kgRest > 0 ? (custoRest + mcFaltante)/kgRest : null;
+  const precoMinBE     = p.custoKg / (1 - p.metaMC/100);
+  const kgCongEfet     = kgRest * (1 - p.perdaCong/100);
+  const recCong        = kgCongEfet * p.precoCong;
+  const mcCong         = recCong - (kgRest * p.custoKg);
+  const mcFinalCong    = mcAcum + mcCong;
+  const recTotCong     = recAcum + recCong;
+  const mgFinalCong    = recTotCong > 0 ? (mcFinalCong/recTotCong)*100 : 0;
+  return { custoTotal,custoTotalComDesp,despesas,mcNecessaria,recNecessaria,kgVendidos,recAcum,mcAcum,mcAcumBruta,kgFrescos,kgRest,progPct,margemAtual,mcKgFresco,mcKgD,mcFaltante,precoMinMeta,precoMinBE,kgCongEfet,recCong,mcCong,mcFinalCong,mgFinalCong };
 }
+
+// ── PEIXES: state ────────────────────────────────────────────────────────────
+let peixesDoLote = []; // cache do lote ativo
+
+// ── PEIXES: load/save ─────────────────────────────────────────────────────────
+async function loadPeixesDoLote(lotId) {
+  const { data, error } = await withTimeout(
+    sb.from('peixes').select('*').eq('lot_id', lotId).order('created_at', { ascending: true }),
+    8000
+  );
+  if (error) { console.error('[peixes] load error:', error.message); peixesDoLote = []; return; }
+  peixesDoLote = data || [];
+}
+
+function peixesDisponiveis() {
+  return peixesDoLote.filter(p => p.status === 'disponivel');
+}
+function peixesVendidos() {
+  return peixesDoLote.filter(p => p.status === 'vendido');
+}
+
+// ── PEIXES: upload de fotos ───────────────────────────────────────────────────
+async function uploadFotoPeixe(file, lotId, lacre) {
+  const ext = file.name.split('.').pop() || 'jpg';
+  const path = `${lotId}/${lacre}_${Date.now()}.${ext}`;
+  const { data, error } = await sb.storage.from('peixes-fotos').upload(path, file, {
+    cacheControl: '3600', upsert: false
+  });
+  if (error) { console.error('[upload foto] error:', error.message); return null; }
+  const { data: urlData } = sb.storage.from('peixes-fotos').getPublicUrl(path);
+  return urlData.publicUrl;
+}
+
+// ── MODAL: Novo Peixe ─────────────────────────────────────────────────────────
+let fotosTemp = []; // arquivos selecionados antes do upload
+
+function showNewPeixeModal() {
+  el('px_lacre').value = '';
+  el('px_peso_cc').value = '';
+  el('px_especie').value = 'Kihada';
+  el('px_qualidade').value = '#2';
+  el('px_estrelas').value = '3';
+  el('px_temp').value = '';
+  fotosTemp = [];
+  renderFotosPreview();
+  el('modalNewPeixe').style.display = 'flex';
+  setTimeout(()=>el('px_lacre').focus(), 100);
+}
+function hidePeixeModal() {
+  el('modalNewPeixe').style.display = 'none';
+  fotosTemp = [];
+}
+
+function handleFotoSelect(input) {
+  const files = Array.from(input.files || []);
+  fotosTemp = fotosTemp.concat(files);
+  renderFotosPreview();
+  input.value = '';
+}
+
+function removeFotoTemp(idx) {
+  fotosTemp.splice(idx, 1);
+  renderFotosPreview();
+}
+
+function renderFotosPreview() {
+  const container = el('px_fotos_preview');
+  if (!container) return;
+  if (fotosTemp.length === 0) {
+    container.innerHTML = '<div class="fotos-empty">Nenhuma foto adicionada</div>';
+    return;
+  }
+  container.innerHTML = fotosTemp.map((f, i) => `
+    <div class="foto-thumb">
+      <img src="${URL.createObjectURL(f)}" alt="foto ${i+1}">
+      <button class="foto-remove" onclick="removeFotoTemp(${i})">✕</button>
+    </div>
+  `).join('');
+}
+
+async function createPeixe() {
+  const lacre = el('px_lacre').value.trim();
+  const pesoCC = parseFloat(el('px_peso_cc').value);
+  const especie = el('px_especie').value;
+  const qualidade = el('px_qualidade').value;
+  const estrelas = parseInt(el('px_estrelas').value) || 0;
+  const temp = el('px_temp').value.trim();
+
+  if (!lacre) { alert('Informe o lacre.'); return; }
+  if (!pesoCC || pesoCC <= 0) { alert('Informe o peso C/C.'); return; }
+  if (fotosTemp.length === 0) { alert('Adicione ao menos 1 foto da classificação.'); return; }
+  if (!activeLotId) { alert('Nenhum lote ativo.'); return; }
+
+  const btn = el('modalNewPeixe').querySelector('.btn-confirm');
+  btn.disabled = true; btn.textContent = 'Salvando…';
+
+  try {
+    const urls = [];
+    for (const file of fotosTemp) {
+      const url = await uploadFotoPeixe(file, activeLotId, lacre);
+      if (url) urls.push(url);
+    }
+
+    const { error } = await sb.from('peixes').insert({
+      lot_id: activeLotId,
+      lacre, peso_cc: pesoCC, peso_sc: pesoCC,
+      especie, qualidade, estrelas,
+      fotos: urls,
+      status: 'disponivel',
+      temp,
+      created_by: currentUser.id,
+    });
+
+    if (error) { alert('Erro ao salvar peixe: ' + error.message); btn.disabled=false; btn.textContent='Salvar Peixe'; return; }
+
+    await loadPeixesDoLote(activeLotId);
+    renderDetail();
+    hidePeixeModal();
+  } catch (err) {
+    alert('Erro: ' + err.message);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Salvar Peixe';
+  }
+}
+
+// ── MODAL: Vender Peixe ───────────────────────────────────────────────────────
+let peixeVendendoId = null;
+
+function showVenderPeixeModal(peixeId) {
+  const peixe = peixesDoLote.find(p => p.id === peixeId);
+  if (!peixe) return;
+  peixeVendendoId = peixeId;
+  el('vp_lacre_label').textContent = `Lacre ${peixe.lacre} · ${peixe.peso_sc}kg · ${peixe.qualidade}`;
+  el('vp_peso_sc').value = peixe.peso_sc;
+  el('vp_cliente').value = '';
+  el('vp_preco').value = '';
+  el('modalVenderPeixe').style.display = 'flex';
+  setTimeout(()=>el('vp_cliente').focus(), 100);
+}
+function hideVenderPeixeModal() {
+  el('modalVenderPeixe').style.display = 'none';
+  peixeVendendoId = null;
+}
+
+async function confirmVenderPeixe() {
+  const pesoSC = parseFloat(el('vp_peso_sc').value);
+  const cliente = el('vp_cliente').value.trim();
+  const preco = parseFloat(el('vp_preco').value);
+
+  if (!cliente) { alert('Informe o cliente.'); return; }
+  if (!preco || preco <= 0) { alert('Informe o preço/kg.'); return; }
+  if (!pesoSC || pesoSC <= 0) { alert('Informe o peso S/C.'); return; }
+  if (!peixeVendendoId) return;
+
+  const btn = el('modalVenderPeixe').querySelector('.btn-confirm');
+  btn.disabled = true; btn.textContent = 'Registrando…';
+
+  const { error: errPeixe } = await sb.from('peixes').update({
+    status: 'vendido', peso_sc: pesoSC, cliente, preco_kg: preco, data_venda: today(),
+  }).eq('id', peixeVendendoId);
+
+  if (errPeixe) { alert('Erro: ' + errPeixe.message); btn.disabled=false; btn.textContent='Confirmar Venda'; return; }
+
+  const receita = pesoSC * preco;
+  const lot = lots.find(l => l.id === activeLotId);
+  const custoKg = lot.params.custoKg;
+  const mc = receita - (pesoSC * custoKg);
+
+  const { error: errVenda } = await sb.from('vendas').insert({
+    lot_id: activeLotId, kg: pesoSC, preco_kg: preco, receita, mc,
+    cliente, is_cong: false, created_by: currentUser.id,
+  });
+
+  if (errVenda) { alert('Peixe marcado como vendido, mas houve erro ao registrar a venda: ' + errVenda.message); }
+
+  await loadPeixesDoLote(activeLotId);
+  await loadData();
+  renderDetail();
+  hideVenderPeixeModal();
+}
+
+// ── RENDER: Inventário de peixes ──────────────────────────────────────────────
+function renderInventarioPeixes() {
+  const container = el('peixes_inventario');
+  if (!container) return;
+
+  const disponiveis = peixesDisponiveis();
+  const vendidos = peixesVendidos();
+
+  const qualColor = (q) => ({
+    '#1': 'qual-1', '#2+': 'qual-2p', '#2': 'qual-2', '#2-': 'qual-2m'
+  }[q] || 'qual-2');
+
+  const stars = (n) => '★'.repeat(n) + '☆'.repeat(5-n);
+
+  const cardHTML = (p, isVendido) => `
+    <div class="peixe-card ${isVendido ? 'peixe-vendido' : ''}">
+      <div class="peixe-foto-wrap">
+        ${p.fotos && p.fotos[0]
+          ? `<img src="${p.fotos[0]}" class="peixe-foto" onclick="showFotosPeixe('${p.id}')">`
+          : `<div class="peixe-foto-placeholder">🐟</div>`}
+        ${p.fotos && p.fotos.length > 1 ? `<span class="peixe-foto-count">+${p.fotos.length-1}</span>` : ''}
+      </div>
+      <div class="peixe-info">
+        <div class="peixe-top-row">
+          <span class="peixe-lacre">#${p.lacre}</span>
+          <span class="peixe-qual ${qualColor(p.qualidade)}">${p.qualidade}</span>
+        </div>
+        <div class="peixe-stars">${stars(p.estrelas||0)}</div>
+        <div class="peixe-peso">${p.peso_sc}kg · ${p.especie}</div>
+        ${isVendido
+          ? `<div class="peixe-venda-info">${p.cliente} · R$${p.preco_kg}/kg</div>`
+          : `<button class="btn-vender-peixe" onclick="showVenderPeixeModal('${p.id}')">Vender →</button>`}
+      </div>
+    </div>
+  `;
+
+  container.innerHTML = `
+    <div class="inventario-section">
+      <div class="inventario-header">
+        <span>Disponíveis</span>
+        <span class="inventario-count">${disponiveis.length}</span>
+      </div>
+      <div class="peixes-grid">
+        ${disponiveis.length ? disponiveis.map(p => cardHTML(p, false)).join('') : '<div class="peixes-empty">Nenhum peixe disponível</div>'}
+      </div>
+    </div>
+    <div class="inventario-section">
+      <div class="inventario-header muted">
+        <span>Vendidos</span>
+        <span class="inventario-count">${vendidos.length}</span>
+      </div>
+      <div class="peixes-grid">
+        ${vendidos.length ? vendidos.map(p => cardHTML(p, true)).join('') : '<div class="peixes-empty">Nenhuma venda ainda</div>'}
+      </div>
+    </div>
+  `;
+}
+
+function showFotosPeixe(peixeId) {
+  const peixe = peixesDoLote.find(p => p.id === peixeId);
+  if (!peixe || !peixe.fotos || peixe.fotos.length === 0) return;
+  el('fotosViewerImgs').innerHTML = peixe.fotos.map(url =>
+    `<img src="${url}" class="fotos-viewer-img">`
+  ).join('');
+  el('fotosViewerTitle').textContent = `Lacre ${peixe.lacre} — ${peixe.fotos.length} foto(s)`;
+  el('modalFotosViewer').style.display = 'flex';
+}
+function hideFotosViewer() { el('modalFotosViewer').style.display = 'none'; }
 
 // ── NAVIGATION ────────────────────────────────────────────────────────────────
 function showDashboard() {
@@ -778,7 +1034,7 @@ function showDashboard() {
   renderDashboard();
 }
 
-function showDetail(lotId) {
+async function showDetail(lotId) {
   const lot = lots.find(l=>l.id===lotId);
   if (!lot) return;
   if (lot.closed) { showClosedView(lotId); return; }
@@ -787,6 +1043,7 @@ function showDetail(lotId) {
   el('viewDetail').classList.add('active');
   el('viewClosed').classList.remove('active');
   loadDetailForm(lot);
+  await loadPeixesDoLote(lotId);
   renderDetail();
 }
 
@@ -1034,6 +1291,7 @@ function renderDetail() {
         return`<tr class="${isHL?'highlight':''}"><td>${c.kgRest>0?fmt(sc.pr)+'/kg':'—'}</td><td>${fmt(sc.mc2)}</td><td style="color:${sc.mg>=p.metaMC?'var(--green)':sc.mg>=0?'var(--warn)':'var(--red)'}">${fmtN(sc.mg)}%</td><td>${fmtN(sc.vs)}%</td><td>${tag}</td></tr>`;
       }).join('')}</tbody></table>
     </div>`;
+  renderInventarioPeixes();
 }
 
 // ── RENDER CLOSED VIEW ────────────────────────────────────────────────────────
@@ -1119,5 +1377,226 @@ function renderDashboard() {
   }
 }
 </script>
+<style>
+/* ── PEIXES: Inventário ── */
+.inventario-section { margin-bottom: 20px; }
+.inventario-header {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 11px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase;
+  color: var(--teal); margin-bottom: 10px; padding-bottom: 6px;
+  border-bottom: 1px solid rgba(46,125,107,0.15);
+}
+.inventario-header.muted { color: var(--gray); }
+.inventario-count {
+  background: rgba(46,125,107,0.1); color: var(--teal);
+  padding: 2px 8px; border-radius: 10px; font-size: 11px;
+}
+.peixes-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+@media (max-width: 480px) {
+  .peixes-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+}
+.peixes-empty {
+  grid-column: 1/-1; text-align: center; padding: 20px;
+  color: var(--gray); font-size: 13px; font-style: italic;
+}
+.peixe-card {
+  background: white; border: 1px solid rgba(46,125,107,0.12);
+  border-radius: 8px; overflow: hidden; transition: box-shadow 0.2s;
+}
+.peixe-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+.peixe-card.peixe-vendido { opacity: 0.6; background: #F5F4F0; }
+.peixe-foto-wrap { position: relative; width: 100%; aspect-ratio: 1; background: #F0EDE6; }
+.peixe-foto { width: 100%; height: 100%; object-fit: cover; cursor: pointer; }
+.peixe-foto-placeholder {
+  width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
+  font-size: 32px; opacity: 0.3;
+}
+.peixe-foto-count {
+  position: absolute; top: 4px; right: 4px;
+  background: rgba(0,0,0,0.7); color: white; font-size: 10px;
+  padding: 2px 6px; border-radius: 10px; font-weight: 600;
+}
+.peixe-info { padding: 8px 10px; }
+.peixe-top-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+.peixe-lacre { font-family: monospace; font-size: 12px; color: #444; font-weight: 600; }
+.peixe-qual { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px; }
+.qual-1   { background: #FDF6E3; color: #B8975A; }
+.qual-2p  { background: #E8F5F1; color: #1A4D42; }
+.qual-2   { background: #F2EDE4; color: #3A3A2E; }
+.qual-2m  { background: #FDECEA; color: #C0392B; }
+.peixe-stars { font-size: 11px; color: #C9A84C; margin-bottom: 4px; }
+.peixe-peso { font-size: 12px; color: #555; margin-bottom: 6px; }
+.peixe-venda-info { font-size: 11px; color: var(--gray); font-style: italic; }
+.btn-vender-peixe {
+  width: 100%; background: var(--teal); color: white; border: none;
+  border-radius: 5px; padding: 6px; font-size: 12px; font-weight: 600;
+  cursor: pointer; transition: background 0.2s;
+}
+.btn-vender-peixe:hover { background: var(--teal-dk); }
+
+.btn-novo-peixe {
+  background: var(--teal-dk); color: white; border: none; border-radius: 6px;
+  padding: 10px 18px; font-size: 13px; font-weight: 600; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px; margin-bottom: 16px;
+}
+.btn-novo-peixe:hover { background: var(--teal); }
+
+/* ── PEIXES: Modal Novo Peixe ── */
+.peixe-form-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;
+}
+.peixe-form-field { display: flex; flex-direction: column; gap: 4px; }
+.peixe-form-field label { font-size: 11px; font-weight: 600; color: var(--gray); text-transform: uppercase; letter-spacing: 0.5px; }
+.peixe-form-field input, .peixe-form-field select {
+  padding: 10px 12px; border: 1px solid #DDD; border-radius: 6px; font-size: 15px;
+  -webkit-appearance: none; appearance: none; background: white;
+}
+.peixe-form-field input:focus, .peixe-form-field select:focus { border-color: var(--teal); outline: none; }
+
+/* Fotos */
+.fotos-camera-row { display: flex; gap: 8px; margin-bottom: 12px; }
+.btn-foto-action {
+  flex: 1; padding: 14px; border: 2px dashed var(--teal); border-radius: 8px;
+  background: rgba(46,125,107,0.04); color: var(--teal); font-size: 13px; font-weight: 600;
+  cursor: pointer; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 4px;
+}
+.btn-foto-action:active { background: rgba(46,125,107,0.1); }
+.fotos-preview-grid {
+  display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; min-height: 60px;
+}
+.fotos-empty { color: var(--gray); font-size: 12px; font-style: italic; padding: 10px 0; }
+.foto-thumb { position: relative; width: 70px; height: 70px; border-radius: 6px; overflow: hidden; }
+.foto-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.foto-remove {
+  position: absolute; top: 2px; right: 2px; width: 20px; height: 20px;
+  background: rgba(0,0,0,0.7); color: white; border: none; border-radius: 50%;
+  font-size: 11px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+
+/* Fotos viewer (lightbox) */
+.fotos-viewer-content {
+  max-width: 90vw; max-height: 85vh; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.fotos-viewer-img { width: 100%; border-radius: 8px; }
+
+/* Touch-friendly buttons everywhere in peixes modals */
+.modal .btn-confirm, .modal .btn-cancel { min-height: 44px; }
+</style>
+
+<!-- ════════════════ MODAL: Novo Peixe ════════════════ -->
+<div class="modal-overlay" id="modalNewPeixe" style="display:none" onclick="if(event.target===this)hidePeixeModal()">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-title">Novo Peixe</div>
+
+    <div class="peixe-form-grid">
+      <div class="peixe-form-field">
+        <label>Lacre</label>
+        <input type="text" id="px_lacre" placeholder="28462" inputmode="numeric">
+      </div>
+      <div class="peixe-form-field">
+        <label>Peso C/C (kg)</label>
+        <input type="number" id="px_peso_cc" placeholder="53.5" step="0.1" inputmode="decimal">
+      </div>
+      <div class="peixe-form-field">
+        <label>Espécie</label>
+        <select id="px_especie">
+          <option value="Kihada">Kihada</option>
+          <option value="Bachi">Bachi</option>
+          <option value="Patudo">Patudo</option>
+        </select>
+      </div>
+      <div class="peixe-form-field">
+        <label>Qualidade</label>
+        <select id="px_qualidade">
+          <option value="#1">#1</option>
+          <option value="#2+">#2+</option>
+          <option value="#2" selected>#2</option>
+          <option value="#2-">#2-</option>
+        </select>
+      </div>
+      <div class="peixe-form-field">
+        <label>Estrelas (1-5)</label>
+        <select id="px_estrelas">
+          <option value="1">★☆☆☆☆</option>
+          <option value="2">★★☆☆☆</option>
+          <option value="3" selected>★★★☆☆</option>
+          <option value="4">★★★★☆</option>
+          <option value="5">★★★★★</option>
+        </select>
+      </div>
+      <div class="peixe-form-field">
+        <label>Temp. (opcional)</label>
+        <input type="text" id="px_temp" placeholder="Frio">
+      </div>
+    </div>
+
+    <label style="font-size:11px;font-weight:600;color:var(--gray);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:8px;">
+      Fotos da classificação (obrigatório)
+    </label>
+    <div class="fotos-camera-row">
+      <label class="btn-foto-action">
+        📷 Tirar Foto
+        <input type="file" accept="image/*" capture="environment" multiple
+               style="display:none" onchange="handleFotoSelect(this)">
+      </label>
+      <label class="btn-foto-action">
+        🖼️ Galeria
+        <input type="file" accept="image/*" multiple
+               style="display:none" onchange="handleFotoSelect(this)">
+      </label>
+    </div>
+    <div class="fotos-preview-grid" id="px_fotos_preview">
+      <div class="fotos-empty">Nenhuma foto adicionada</div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="hidePeixeModal()">Cancelar</button>
+      <button class="btn-confirm" onclick="createPeixe()">Salvar Peixe</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════ MODAL: Vender Peixe ════════════════ -->
+<div class="modal-overlay" id="modalVenderPeixe" style="display:none" onclick="if(event.target===this)hideVenderPeixeModal()">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-title">Registrar Venda</div>
+    <div id="vp_lacre_label" style="font-size:13px;color:var(--gray);margin-bottom:16px;"></div>
+
+    <div class="peixe-form-grid" style="grid-template-columns:1fr;">
+      <div class="peixe-form-field">
+        <label>Cliente</label>
+        <input type="text" id="vp_cliente" placeholder="Nome do cliente">
+      </div>
+      <div class="peixe-form-field">
+        <label>Peso S/C confirmado (kg)</label>
+        <input type="number" id="vp_peso_sc" step="0.1" inputmode="decimal">
+      </div>
+      <div class="peixe-form-field">
+        <label>Preço/kg (R$)</label>
+        <input type="number" id="vp_preco" placeholder="60.00" step="0.01" inputmode="decimal">
+      </div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="hideVenderPeixeModal()">Cancelar</button>
+      <button class="btn-confirm" onclick="confirmVenderPeixe()">Confirmar Venda</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════ MODAL: Visualizador de Fotos ════════════════ -->
+<div class="modal-overlay" id="modalFotosViewer" style="display:none" onclick="if(event.target===this)hideFotosViewer()">
+  <div class="modal" style="max-width:600px">
+    <div class="modal-title" id="fotosViewerTitle"></div>
+    <div class="fotos-viewer-content" id="fotosViewerImgs"></div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="hideFotosViewer()" style="width:100%">Fechar</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
