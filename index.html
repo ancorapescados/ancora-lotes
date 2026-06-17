@@ -902,57 +902,144 @@ async function createPeixe() {
   }
 }
 
-// ── MODAL: Vender Peixe ───────────────────────────────────────────────────────
-let peixeVendendoId = null;
+// ── Rendimentos médios de referência ─────────────────────────────────────────
+const RENDIMENTO_MEDIO = {
+  'Inteiro C/C': 1.00,
+  'Inteiro S/C': 0.88,
+  'Filé': 0.55,
+  'Lombo': 0.45,
+};
+
+// ── PEIXES: helpers de status por peso_restante ───────────────────────────────
+function statusPeixe(p) {
+  const total = p.peso_sc || p.peso_cc || 0;
+  const rest = p.peso_restante != null ? p.peso_restante : total;
+  if (rest <= 0) return 'esgotado';
+  if (rest < total) return 'parcial';
+  return 'disponivel';
+}
+
+// ── PEIXES: vendas parciais já feitas (cache) ─────────────────────────────────
+let vendasParciaisDoLote = [];
+
+async function loadVendasParciaisDoLote(lotId) {
+  const { data, error } = await withTimeout(
+    sb.from('vendas_parciais').select('*').eq('lot_id', lotId).order('created_at', { ascending: true }),
+    8000
+  );
+  if (error) { console.error('[vendas_parciais] load error:', error.message); vendasParciaisDoLote = []; return; }
+  vendasParciaisDoLote = data || [];
+}
+
+function getVendasParciaisDoPeixe(peixeId) {
+  return vendasParciaisDoLote.filter(v => v.peixe_id === peixeId);
+}
+
+// ── MODAL: Venda Parcial ──────────────────────────────────────────────────────
+let peixeParcialId = null;
 
 function showVenderPeixeModal(peixeId) {
   const peixe = peixesDoLote.find(p => p.id === peixeId);
   if (!peixe) return;
-  peixeVendendoId = peixeId;
-  el('vp_lacre_label').textContent = `Lacre ${peixe.lacre} · ${peixe.peso_sc}kg · ${peixe.qualidade}`;
-  el('vp_peso_sc').value = peixe.peso_sc;
+  peixeParcialId = peixeId;
+
+  const total = peixe.peso_sc || peixe.peso_cc || 0;
+  const restante = peixe.peso_restante != null ? peixe.peso_restante : total;
+
+  el('vp_lacre_label').innerHTML = `Lacre ${peixe.lacre} · ${peixe.qualidade} · <strong>${restante.toFixed(1)}kg restantes</strong> de ${total.toFixed(1)}kg total`;
+  el('vp_corte').value = 'Lombo';
+  el('vp_peso_sc').value = '';
+  el('vp_peso_sc').max = restante;
   el('vp_cliente').value = '';
   el('vp_preco').value = '';
+  updateRendimentoSugerido();
+
+  const historico = getVendasParciaisDoPeixe(peixeId);
+  const histContainer = el('vp_historico');
+  if (histContainer) {
+    if (historico.length === 0) {
+      histContainer.innerHTML = '';
+    } else {
+      histContainer.innerHTML = '<div class="vp-hist-title">Vendas já registradas deste peixe:</div>' +
+        historico.map(v => `
+          <div class="vp-hist-item">
+            <span>${v.corte} · ${v.peso}kg → ${v.cliente}</span>
+            <span>R$${v.preco}/kg</span>
+          </div>
+        `).join('');
+    }
+  }
+
   el('modalVenderPeixe').style.display = 'flex';
   setTimeout(()=>el('vp_cliente').focus(), 100);
 }
+
+function updateRendimentoSugerido() {
+  const corte = el('vp_corte').value;
+  const peixe = peixesDoLote.find(p => p.id === peixeParcialId);
+  if (!peixe) return;
+  const total = peixe.peso_sc || peixe.peso_cc || 0;
+  const rendimento = RENDIMENTO_MEDIO[corte] || 1;
+  const sugestao = (total * rendimento).toFixed(1);
+  const hint = el('vp_rendimento_hint');
+  if (hint) hint.textContent = `Rendimento médio (${corte}): ~${(rendimento*100).toFixed(0)}% · peso estimado: ${sugestao}kg`;
+}
+
 function hideVenderPeixeModal() {
   el('modalVenderPeixe').style.display = 'none';
-  peixeVendendoId = null;
+  peixeParcialId = null;
 }
 
 async function confirmVenderPeixe() {
-  const pesoSC = parseFloat(el('vp_peso_sc').value);
+  const corte = el('vp_corte').value;
+  const peso = parseFloat(el('vp_peso_sc').value);
   const cliente = el('vp_cliente').value.trim();
   const preco = parseFloat(el('vp_preco').value);
 
   if (!cliente) { alert('Informe o cliente.'); return; }
   if (!preco || preco <= 0) { alert('Informe o preço/kg.'); return; }
-  if (!pesoSC || pesoSC <= 0) { alert('Informe o peso S/C.'); return; }
-  if (!peixeVendendoId) return;
+  if (!peso || peso <= 0) { alert('Informe o peso vendido.'); return; }
+  if (!peixeParcialId) return;
+
+  const peixe = peixesDoLote.find(p => p.id === peixeParcialId);
+  if (!peixe) return;
+
+  const restante = peixe.peso_restante != null ? peixe.peso_restante : (peixe.peso_sc || peixe.peso_cc || 0);
+  if (peso > restante + 0.01) {
+    if (!confirm(`Atenção: peso informado (${peso}kg) é maior que o restante (${restante.toFixed(1)}kg). Continuar mesmo assim?`)) return;
+  }
 
   const btn = el('modalVenderPeixe').querySelector('.btn-confirm');
   btn.disabled = true; btn.textContent = 'Registrando…';
 
-  const { error: errPeixe } = await sb.from('peixes').update({
-    status: 'vendido', peso_sc: pesoSC, cliente, preco_kg: preco, data_venda: todayISO(),
-  }).eq('id', peixeVendendoId);
-
-  if (errPeixe) { alert('Erro: ' + errPeixe.message); btn.disabled=false; btn.textContent='Confirmar Venda'; return; }
-
-  const receita = pesoSC * preco;
   const lot = lots.find(l => l.id === activeLotId);
   const custoKg = lot.params.custoKg;
-  const mc = receita - (pesoSC * custoKg);
+  const receita = peso * preco;
+  const custo = peso * custoKg;
+  const mc = receita - custo;
 
-  const { error: errVenda } = await sb.from('vendas').insert({
-    lot_id: activeLotId, kg: pesoSC, preco: preco, preco_efet: preco,
-    receita, custo: pesoSC * custoKg, mc, cliente, is_cong: false,
+  const { error: errVenda } = await sb.from('vendas_parciais').insert({
+    peixe_id: peixeParcialId, lot_id: activeLotId,
+    corte, peso, preco, receita, custo, mc, cliente,
+    data_venda: todayISO(), created_by: currentUser.id,
   });
+  if (errVenda) { alert('Erro ao registrar venda: ' + errVenda.message); btn.disabled=false; btn.textContent='Confirmar Venda'; return; }
 
-  if (errVenda) { alert('Peixe marcado como vendido, mas houve erro ao registrar a venda: ' + errVenda.message); }
+  const novoRestante = Math.max(0, restante - peso);
+  const novoStatus = novoRestante <= 0 ? 'vendido' : 'disponivel';
+  const { error: errPeixe } = await sb.from('peixes').update({
+    peso_restante: novoRestante,
+    status: novoStatus,
+  }).eq('id', peixeParcialId);
+  if (errPeixe) { alert('Venda registrada, mas houve erro ao atualizar o peixe: ' + errPeixe.message); }
+
+  const { error: errVendaLegado } = await sb.from('vendas').insert({
+    lot_id: activeLotId, kg: peso, preco, preco_efet: preco, receita, custo, mc, cliente, is_cong: false,
+  });
+  if (errVendaLegado) { console.error('[vendas legado] erro:', errVendaLegado.message); }
 
   await loadPeixesDoLote(activeLotId);
+  await loadVendasParciaisDoLote(activeLotId);
   await loadData();
   renderDetail();
   hideVenderPeixeModal();
@@ -963,22 +1050,30 @@ function renderInventarioPeixes() {
   const container = el('peixes_inventario');
   if (!container) return;
 
-  const disponiveis = peixesDisponiveis();
-  const vendidos = peixesVendidos();
-
   const qualColor = (q) => ({
     '#1': 'qual-1', '#2+': 'qual-2p', '#2': 'qual-2', '#2-': 'qual-2m'
   }[q] || 'qual-2');
-
   const stars = (n) => '★'.repeat(n) + '☆'.repeat(5-n);
 
-  const cardHTML = (p, isVendido) => `
-    <div class="peixe-card ${isVendido ? 'peixe-vendido' : ''}">
+  const disponiveis = peixesDoLote.filter(p => statusPeixe(p) !== 'esgotado');
+  const esgotados = peixesDoLote.filter(p => statusPeixe(p) === 'esgotado');
+
+  const cardHTML = (p) => {
+    const total = p.peso_sc || p.peso_cc || 0;
+    const restante = p.peso_restante != null ? p.peso_restante : total;
+    const pct = total > 0 ? (restante/total*100) : 0;
+    const st = statusPeixe(p);
+    const isEsgotado = st === 'esgotado';
+    const isParcial = st === 'parcial';
+
+    return `
+    <div class="peixe-card ${isEsgotado ? 'peixe-vendido' : ''}">
       <div class="peixe-foto-wrap">
         ${p.fotos && p.fotos[0]
           ? `<img src="${p.fotos[0]}" class="peixe-foto" onclick="showFotosPeixe('${p.id}')">`
           : `<div class="peixe-foto-placeholder">🐟</div>`}
         ${p.fotos && p.fotos.length > 1 ? `<span class="peixe-foto-count">+${p.fotos.length-1}</span>` : ''}
+        ${isParcial ? `<span class="peixe-parcial-badge">Parcial</span>` : ''}
       </div>
       <div class="peixe-info">
         <div class="peixe-top-row">
@@ -986,35 +1081,42 @@ function renderInventarioPeixes() {
           <span class="peixe-qual ${qualColor(p.qualidade)}">${p.qualidade}</span>
         </div>
         <div class="peixe-stars">${stars(p.estrelas||0)}</div>
-        <div class="peixe-peso">${p.peso_sc}kg · ${p.especie}</div>
-        ${isVendido
-          ? `<div class="peixe-venda-info">${p.cliente} · R$${p.preco_kg}/kg</div>`
-          : `<button class="btn-vender-peixe" onclick="showVenderPeixeModal('${p.id}')">Vender →</button>`}
-        <div class="peixe-actions">
-          <button class="btn-editar-peixe" onclick="showEditPeixeModal('${p.id}')">Editar</button>
-          ${isVendido ? `<button class="btn-desfazer-venda" onclick="desfazerVendaPeixe('${p.id}')">Desfazer</button>` : ''}
+        <div class="peixe-peso">
+          ${isEsgotado
+            ? `${total.toFixed(1)}kg · ${p.especie} · esgotado`
+            : `<strong>${restante.toFixed(1)}kg</strong> rest. de ${total.toFixed(1)}kg · ${p.especie}`}
         </div>
+        ${!isEsgotado ? `
+          <div class="peixe-restante-bar"><div class="peixe-restante-fill" style="width:${pct}%"></div></div>
+          <div class="peixe-actions">
+            <button class="btn-vender-peixe" onclick="showVenderPeixeModal('${p.id}')">Vender →</button>
+            <button class="btn-editar-peixe" onclick="showEditPeixeModal('${p.id}')">✏️</button>
+          </div>
+        ` : `
+          <button class="btn-editar-peixe-full" onclick="showEditPeixeModal('${p.id}')">Editar / Desfazer</button>
+        `}
       </div>
     </div>
   `;
+  };
 
   container.innerHTML = `
     <div class="inventario-section">
       <div class="inventario-header">
-        <span>Disponíveis</span>
+        <span>Disponíveis / Parciais</span>
         <span class="inventario-count">${disponiveis.length}</span>
       </div>
       <div class="peixes-grid">
-        ${disponiveis.length ? disponiveis.map(p => cardHTML(p, false)).join('') : '<div class="peixes-empty">Nenhum peixe disponível</div>'}
+        ${disponiveis.length ? disponiveis.map(cardHTML).join('') : '<div class="peixes-empty">Nenhum peixe disponível</div>'}
       </div>
     </div>
     <div class="inventario-section">
       <div class="inventario-header muted">
-        <span>Vendidos</span>
-        <span class="inventario-count">${vendidos.length}</span>
+        <span>Esgotados</span>
+        <span class="inventario-count">${esgotados.length}</span>
       </div>
       <div class="peixes-grid">
-        ${vendidos.length ? vendidos.map(p => cardHTML(p, true)).join('') : '<div class="peixes-empty">Nenhuma venda ainda</div>'}
+        ${esgotados.length ? esgotados.map(cardHTML).join('') : '<div class="peixes-empty">Nenhum peixe esgotado ainda</div>'}
       </div>
     </div>
   `;
@@ -1138,6 +1240,7 @@ async function showDetail(lotId) {
   el('viewClosed').classList.remove('active');
   loadDetailForm(lot);
   await loadPeixesDoLote(lotId);
+  await loadVendasParciaisDoLote(lotId);
   renderDetail();
 }
 
@@ -1580,15 +1683,43 @@ function renderDashboard() {
 /* Touch-friendly buttons everywhere in peixes modals */
 .modal .btn-confirm, .modal .btn-cancel { min-height: 44px; }
 
-/* ── PEIXES: Botões Editar / Desfazer ── */
-.peixe-actions { display: flex; gap: 4px; margin-top: 6px; }
-.btn-editar-peixe {
-  flex: 1; background: transparent; color: var(--teal); border: 1px solid var(--teal);
-  border-radius: 5px; padding: 5px; font-size: 11px; font-weight: 600; cursor: pointer;
+/* ── Peso restante: barra de progresso ── */
+.peixe-restante-bar {
+  height: 4px; background: rgba(46,125,107,0.12); border-radius: 2px;
+  margin-bottom: 8px; overflow: hidden;
 }
-.btn-desfazer-venda {
-  flex: 1; background: transparent; color: var(--red); border: 1px solid var(--red);
-  border-radius: 5px; padding: 5px; font-size: 11px; font-weight: 600; cursor: pointer;
+.peixe-restante-fill {
+  height: 100%; background: var(--teal); border-radius: 2px;
+  transition: width 0.3s;
+}
+.peixe-parcial-badge {
+  position: absolute; bottom: 4px; left: 4px;
+  background: rgba(201,168,76,0.9); color: white; font-size: 9px;
+  font-weight: 700; padding: 2px 6px; border-radius: 4px;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.peixe-actions { display: flex; gap: 6px; }
+.peixe-actions .btn-vender-peixe { flex: 1; }
+.btn-editar-peixe {
+  background: rgba(46,125,107,0.08); border: 1px solid rgba(46,125,107,0.2);
+  border-radius: 5px; padding: 6px 10px; cursor: pointer; font-size: 13px;
+}
+.btn-editar-peixe-full {
+  width: 100%; background: none; border: 1px solid #DDD; border-radius: 5px;
+  padding: 6px; font-size: 11px; color: var(--gray); cursor: pointer;
+}
+
+/* ── Modal de venda parcial: histórico ── */
+.vp-hist-title {
+  font-size: 11px; font-weight: 600; color: var(--gray); margin-bottom: 6px;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.vp-hist-item {
+  display: flex; justify-content: space-between; font-size: 12px;
+  padding: 6px 0; border-bottom: 1px solid #F0F0F0; color: #555;
+}
+.vp-rendimento-hint {
+  font-size: 11px; color: var(--teal); font-style: italic; margin-top: -8px; margin-bottom: 8px;
 }
 </style>
 
@@ -1667,18 +1798,30 @@ function renderDashboard() {
 
 <!-- ════════════════ MODAL: Vender Peixe ════════════════ -->
 <div class="modal-overlay" id="modalVenderPeixe" style="display:none" onclick="if(event.target===this)hideVenderPeixeModal()">
-  <div class="modal" style="max-width:420px">
+  <div class="modal" style="max-width:440px">
     <div class="modal-title">Registrar Venda</div>
     <div id="vp_lacre_label" style="font-size:13px;color:var(--gray);margin-bottom:16px;"></div>
 
+    <div id="vp_historico" style="margin-bottom:14px;"></div>
+
     <div class="peixe-form-grid" style="grid-template-columns:1fr;">
+      <div class="peixe-form-field">
+        <label>Tipo de corte</label>
+        <select id="vp_corte" onchange="updateRendimentoSugerido()">
+          <option value="Inteiro C/C">Inteiro C/C</option>
+          <option value="Inteiro S/C">Inteiro S/C</option>
+          <option value="Filé">Filé</option>
+          <option value="Lombo" selected>Lombo</option>
+        </select>
+      </div>
+      <div class="vp-rendimento-hint" id="vp_rendimento_hint"></div>
       <div class="peixe-form-field">
         <label>Cliente</label>
         <input type="text" id="vp_cliente" placeholder="Nome do cliente">
       </div>
       <div class="peixe-form-field">
-        <label>Peso S/C confirmado (kg)</label>
-        <input type="number" id="vp_peso_sc" step="0.1" inputmode="decimal">
+        <label>Peso vendido — pesado na hora (kg)</label>
+        <input type="number" id="vp_peso_sc" step="0.1" inputmode="decimal" placeholder="Peso real na balança">
       </div>
       <div class="peixe-form-field">
         <label>Preço/kg (R$)</label>
