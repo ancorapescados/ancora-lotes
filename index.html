@@ -1084,7 +1084,7 @@ async function createLot() {
 
   const { data: newLot, error } = await withTimeout(
     sb.from('lots').insert({
-      name, date: today(),
+      name, date: todayISO(),
       params: { kgTotal:kg, custoKg:custo, metaMC:meta, precoCong:cong, perdaCong:3 },
       closed: false, closed_date: null, created_by: currentUser.id
     }).select().single(), 10000
@@ -1187,7 +1187,7 @@ function confirmCloseLot() {
 async function closeLot() {
   const lot = lots.find(l=>l.id===activeLotId);
   if (!lot) return;
-  const closedDate = today();
+  const closedDate = todayISO();
   await sb.from('lots').update({ closed: true, closed_date: closedDate }).eq('id', lot.id);
   lot.closed = true;
   lot.closed_date = closedDate;
