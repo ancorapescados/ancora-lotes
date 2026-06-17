@@ -817,6 +817,7 @@ function showNewPeixeModal() {
   el('px_lacre').value = '';
   el('px_peso_cc').value = '';
   el('px_especie').value = 'Kihada';
+  el('px_estado_entrada').value = 'cc';
   el('px_qualidade').value = '#2';
   el('px_estrelas').value = '3';
   el('px_temp').value = '';
@@ -864,9 +865,10 @@ async function createPeixe() {
   const qualidade = el('px_qualidade').value;
   const estrelas = parseInt(el('px_estrelas').value) || 0;
   const temp = el('px_temp').value.trim();
+  const estadoEntrada = el('px_estado_entrada').value;
 
   if (!lacre) { alert('Informe o lacre.'); return; }
-  if (!pesoCC || pesoCC <= 0) { alert('Informe o peso C/C.'); return; }
+  if (!pesoCC || pesoCC <= 0) { alert('Informe o peso.'); return; }
   if (fotosTemp.length === 0) { alert('Adicione ao menos 1 foto da classificação.'); return; }
   if (!activeLotId) { alert('Nenhum lote ativo.'); return; }
 
@@ -883,6 +885,8 @@ async function createPeixe() {
     const { error } = await sb.from('peixes').insert({
       lot_id: activeLotId,
       lacre, peso_cc: pesoCC, peso_sc: pesoCC,
+      peso_restante: pesoCC,
+      estado_entrada: estadoEntrada,
       especie, qualidade, estrelas,
       fotos: urls,
       status: 'disponivel',
@@ -902,13 +906,25 @@ async function createPeixe() {
   }
 }
 
-// ── Rendimentos médios de referência ─────────────────────────────────────────
+// ── Tabela de rendimento real, por estado de entrada ─────────────────────────
 const RENDIMENTO_MEDIO = {
-  'Inteiro C/C': 1.00,
-  'Inteiro S/C': 0.88,
-  'Filé': 0.55,
-  'Lombo': 0.45,
+  cc: {
+    'Inteiro C/C': 1.00,
+    'Inteiro S/C': 0.90,
+    'Filé': 0.70,
+    'Lombo': 0.55,
+  },
+  sc: {
+    'Inteiro S/C': 1.00,
+    'Filé': 0.80,
+    'Lombo': 0.65,
+  },
 };
+
+function cortesDisponiveis(peixe) {
+  const estado = peixe.estado_entrada || 'cc';
+  return Object.keys(RENDIMENTO_MEDIO[estado]);
+}
 
 // ── PEIXES: helpers de status por peso_restante ───────────────────────────────
 function statusPeixe(p) {
@@ -945,9 +961,14 @@ function showVenderPeixeModal(peixeId) {
 
   const total = peixe.peso_sc || peixe.peso_cc || 0;
   const restante = peixe.peso_restante != null ? peixe.peso_restante : total;
+  const estadoLabel = (peixe.estado_entrada === 'sc') ? 'chegou S/C' : 'chegou C/C';
 
-  el('vp_lacre_label').innerHTML = `Lacre ${peixe.lacre} · ${peixe.qualidade} · <strong>${restante.toFixed(1)}kg restantes</strong> de ${total.toFixed(1)}kg total`;
-  el('vp_corte').value = 'Lombo';
+  el('vp_lacre_label').innerHTML = `Lacre ${peixe.lacre} · ${peixe.qualidade} · ${estadoLabel} · <strong>${restante.toFixed(1)}kg restantes</strong> de ${total.toFixed(1)}kg total`;
+
+  const cortes = cortesDisponiveis(peixe);
+  el('vp_corte').innerHTML = cortes.map(c => `<option value="${c}">${c}</option>`).join('');
+  el('vp_corte').value = cortes.includes('Lombo') ? 'Lombo' : cortes[0];
+
   el('vp_peso_sc').value = '';
   el('vp_peso_sc').max = restante;
   el('vp_cliente').value = '';
@@ -978,11 +999,12 @@ function updateRendimentoSugerido() {
   const corte = el('vp_corte').value;
   const peixe = peixesDoLote.find(p => p.id === peixeParcialId);
   if (!peixe) return;
-  const total = peixe.peso_sc || peixe.peso_cc || 0;
-  const rendimento = RENDIMENTO_MEDIO[corte] || 1;
+  const estado = peixe.estado_entrada || 'cc';
+  const total = peixe.peso_cc || peixe.peso_sc || 0;
+  const rendimento = (RENDIMENTO_MEDIO[estado] && RENDIMENTO_MEDIO[estado][corte]) || 1;
   const sugestao = (total * rendimento).toFixed(1);
   const hint = el('vp_rendimento_hint');
-  if (hint) hint.textContent = `Rendimento médio (${corte}): ~${(rendimento*100).toFixed(0)}% · peso estimado: ${sugestao}kg`;
+  if (hint) hint.textContent = `Rendimento médio (${corte} a partir de ${estado === 'sc' ? 'S/C' : 'C/C'}): ~${(rendimento*100).toFixed(0)}% · peso estimado: ${sugestao}kg`;
 }
 
 function hideVenderPeixeModal() {
@@ -1743,6 +1765,13 @@ function renderDashboard() {
           <option value="Kihada">Kihada</option>
           <option value="Bachi">Bachi</option>
           <option value="Patudo">Patudo</option>
+        </select>
+      </div>
+      <div class="peixe-form-field">
+        <label>Estado de entrada</label>
+        <select id="px_estado_entrada">
+          <option value="cc">Chegou C/C (com cabeça)</option>
+          <option value="sc">Chegou S/C (sem cabeça)</option>
         </select>
       </div>
       <div class="peixe-form-field">
