@@ -959,6 +959,9 @@ function showVenderPeixeModal(peixeId) {
   if (!peixe) return;
   peixeParcialId = peixeId;
 
+  const btnReset = el('modalVenderPeixe').querySelector('.btn-confirm');
+  if (btnReset) { btnReset.disabled = false; btnReset.textContent = 'Confirmar Venda'; }
+
   const total = peixe.peso_sc || peixe.peso_cc || 0;
   const restante = peixe.peso_restante != null ? peixe.peso_restante : total;
   const estadoLabel = (peixe.estado_entrada === 'sc') ? 'chegou S/C' : 'chegou C/C';
