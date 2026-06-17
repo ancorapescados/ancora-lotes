@@ -946,8 +946,8 @@ async function confirmVenderPeixe() {
   const mc = receita - (pesoSC * custoKg);
 
   const { error: errVenda } = await sb.from('vendas').insert({
-    lot_id: activeLotId, kg: pesoSC, preco_kg: preco, receita, mc,
-    cliente, is_cong: false, created_by: currentUser.id,
+    lot_id: activeLotId, kg: pesoSC, preco: preco, preco_efet: preco,
+    receita, custo: pesoSC * custoKg, mc, cliente, is_cong: false,
   });
 
   if (errVenda) { alert('Peixe marcado como vendido, mas houve erro ao registrar a venda: ' + errVenda.message); }
