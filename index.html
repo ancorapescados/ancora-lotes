@@ -610,7 +610,8 @@ let saveTimer = null;
 const fmt  = v => 'R$ ' + v.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmtN = (v,d=1) => v.toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d});
 const el   = id => document.getElementById(id);
-const today = () => new Date().toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric'});
+const today    = () => new Date().toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric'});
+const todayISO = () => new Date().toISOString().slice(0, 10);
 
 function showLoading(show) {
   // disabled - overlay removed
@@ -934,7 +935,7 @@ async function confirmVenderPeixe() {
   btn.disabled = true; btn.textContent = 'Registrando…';
 
   const { error: errPeixe } = await sb.from('peixes').update({
-    status: 'vendido', peso_sc: pesoSC, cliente, preco_kg: preco, data_venda: today(),
+    status: 'vendido', peso_sc: pesoSC, cliente, preco_kg: preco, data_venda: todayISO(),
   }).eq('id', peixeVendendoId);
 
   if (errPeixe) { alert('Erro: ' + errPeixe.message); btn.disabled=false; btn.textContent='Confirmar Venda'; return; }
