@@ -990,6 +990,10 @@ function renderInventarioPeixes() {
         ${isVendido
           ? `<div class="peixe-venda-info">${p.cliente} · R$${p.preco_kg}/kg</div>`
           : `<button class="btn-vender-peixe" onclick="showVenderPeixeModal('${p.id}')">Vender →</button>`}
+        <div class="peixe-actions">
+          <button class="btn-editar-peixe" onclick="showEditPeixeModal('${p.id}')">Editar</button>
+          ${isVendido ? `<button class="btn-desfazer-venda" onclick="desfazerVendaPeixe('${p.id}')">Desfazer</button>` : ''}
+        </div>
       </div>
     </div>
   `;
@@ -1026,6 +1030,94 @@ function showFotosPeixe(peixeId) {
   el('modalFotosViewer').style.display = 'flex';
 }
 function hideFotosViewer() { el('modalFotosViewer').style.display = 'none'; }
+
+// ── MODAL: Editar Peixe ───────────────────────────────────────────────────────
+let peixeEditandoId = null;
+
+function showEditPeixeModal(peixeId) {
+  const peixe = peixesDoLote.find(p => p.id === peixeId);
+  if (!peixe) return;
+  peixeEditandoId = peixeId;
+  el('ep_lacre').value = peixe.lacre;
+  el('ep_peso_sc').value = peixe.peso_sc;
+  el('ep_especie').value = peixe.especie;
+  el('ep_qualidade').value = peixe.qualidade;
+  el('ep_estrelas').value = peixe.estrelas || 3;
+  const vendaFields = el('ep_venda_fields');
+  if (peixe.status === 'vendido') {
+    vendaFields.style.display = 'block';
+    el('ep_cliente').value = peixe.cliente || '';
+    el('ep_preco_kg').value = peixe.preco_kg || '';
+  } else {
+    vendaFields.style.display = 'none';
+  }
+  el('modalEditPeixe').style.display = 'flex';
+}
+
+function hideEditPeixeModal() {
+  el('modalEditPeixe').style.display = 'none';
+  peixeEditandoId = null;
+}
+
+async function confirmEditPeixe() {
+  if (!peixeEditandoId) return;
+  const peixe = peixesDoLote.find(p => p.id === peixeEditandoId);
+  if (!peixe) return;
+
+  const lacre = el('ep_lacre').value.trim();
+  const pesoSC = parseFloat(el('ep_peso_sc').value);
+  const especie = el('ep_especie').value;
+  const qualidade = el('ep_qualidade').value;
+  const estrelas = parseInt(el('ep_estrelas').value) || 0;
+
+  if (!lacre) { alert('Informe o lacre.'); return; }
+  if (!pesoSC || pesoSC <= 0) { alert('Informe o peso.'); return; }
+
+  const updates = { lacre, peso_sc: pesoSC, especie, qualidade, estrelas };
+
+  if (peixe.status === 'vendido') {
+    const cliente = el('ep_cliente').value.trim();
+    const precoKg = parseFloat(el('ep_preco_kg').value);
+    if (!cliente) { alert('Informe o cliente.'); return; }
+    if (!precoKg || precoKg <= 0) { alert('Informe o preço/kg.'); return; }
+    updates.cliente = cliente;
+    updates.preco_kg = precoKg;
+  }
+
+  const btn = el('modalEditPeixe').querySelector('.btn-confirm');
+  btn.disabled = true; btn.textContent = 'Salvando…';
+
+  const { error } = await sb.from('peixes').update(updates).eq('id', peixeEditandoId);
+  if (error) { alert('Erro ao salvar: ' + error.message); btn.disabled=false; btn.textContent='Salvar'; return; }
+
+  await loadPeixesDoLote(activeLotId);
+  renderDetail();
+  hideEditPeixeModal();
+  btn.disabled = false; btn.textContent = 'Salvar';
+}
+
+// ── Desfazer venda ────────────────────────────────────────────────────────────
+async function desfazerVendaPeixe(peixeId) {
+  const peixe = peixesDoLote.find(p => p.id === peixeId);
+  if (!peixe) return;
+  if (!confirm(`Desfazer venda do lacre ${peixe.lacre}? Isso removerá a venda registrada.`)) return;
+
+  const { error: errPeixe } = await sb.from('peixes').update({
+    status: 'disponivel', cliente: null, preco_kg: null, data_venda: null,
+  }).eq('id', peixeId);
+  if (errPeixe) { alert('Erro ao atualizar peixe: ' + errPeixe.message); return; }
+
+  const { error: errVenda } = await sb.from('vendas')
+    .delete()
+    .eq('lot_id', activeLotId)
+    .eq('kg', peixe.peso_sc)
+    .eq('preco_efet', peixe.preco_kg);
+  if (errVenda) { alert('Peixe revertido, mas erro ao remover venda: ' + errVenda.message); }
+
+  await loadPeixesDoLote(activeLotId);
+  await loadData();
+  renderDetail();
+}
 
 // ── NAVIGATION ────────────────────────────────────────────────────────────────
 function showDashboard() {
@@ -1487,6 +1579,17 @@ function renderDashboard() {
 
 /* Touch-friendly buttons everywhere in peixes modals */
 .modal .btn-confirm, .modal .btn-cancel { min-height: 44px; }
+
+/* ── PEIXES: Botões Editar / Desfazer ── */
+.peixe-actions { display: flex; gap: 4px; margin-top: 6px; }
+.btn-editar-peixe {
+  flex: 1; background: transparent; color: var(--teal); border: 1px solid var(--teal);
+  border-radius: 5px; padding: 5px; font-size: 11px; font-weight: 600; cursor: pointer;
+}
+.btn-desfazer-venda {
+  flex: 1; background: transparent; color: var(--red); border: 1px solid var(--red);
+  border-radius: 5px; padding: 5px; font-size: 11px; font-weight: 600; cursor: pointer;
+}
 </style>
 
 <!-- ════════════════ MODAL: Novo Peixe ════════════════ -->
@@ -1586,6 +1689,70 @@ function renderDashboard() {
     <div class="modal-actions">
       <button class="btn-cancel" onclick="hideVenderPeixeModal()">Cancelar</button>
       <button class="btn-confirm" onclick="confirmVenderPeixe()">Confirmar Venda</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════ MODAL: Editar Peixe ════════════════ -->
+<div class="modal-overlay" id="modalEditPeixe" style="display:none" onclick="if(event.target===this)hideEditPeixeModal()">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-title">Editar Peixe</div>
+
+    <div class="peixe-form-grid">
+      <div class="peixe-form-field">
+        <label>Lacre</label>
+        <input type="text" id="ep_lacre" inputmode="numeric">
+      </div>
+      <div class="peixe-form-field">
+        <label>Peso S/C (kg)</label>
+        <input type="number" id="ep_peso_sc" step="0.1" inputmode="decimal">
+      </div>
+      <div class="peixe-form-field">
+        <label>Espécie</label>
+        <select id="ep_especie">
+          <option value="Kihada">Kihada</option>
+          <option value="Bachi">Bachi</option>
+          <option value="Patudo">Patudo</option>
+        </select>
+      </div>
+      <div class="peixe-form-field">
+        <label>Qualidade</label>
+        <select id="ep_qualidade">
+          <option value="#1">#1</option>
+          <option value="#2+">#2+</option>
+          <option value="#2">#2</option>
+          <option value="#2-">#2-</option>
+        </select>
+      </div>
+      <div class="peixe-form-field" style="grid-column:1/-1">
+        <label>Estrelas (1-5)</label>
+        <select id="ep_estrelas">
+          <option value="1">★☆☆☆☆</option>
+          <option value="2">★★☆☆☆</option>
+          <option value="3">★★★☆☆</option>
+          <option value="4">★★★★☆</option>
+          <option value="5">★★★★★</option>
+        </select>
+      </div>
+    </div>
+
+    <div id="ep_venda_fields" style="display:none">
+      <div style="font-size:11px;font-weight:600;color:var(--gray);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Dados da Venda</div>
+      <div class="peixe-form-grid" style="grid-template-columns:1fr;">
+        <div class="peixe-form-field">
+          <label>Cliente</label>
+          <input type="text" id="ep_cliente">
+        </div>
+        <div class="peixe-form-field">
+          <label>Preço/kg (R$)</label>
+          <input type="number" id="ep_preco_kg" step="0.01" inputmode="decimal">
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="hideEditPeixeModal()">Cancelar</button>
+      <button class="btn-confirm" onclick="confirmEditPeixe()">Salvar</button>
     </div>
   </div>
 </div>
