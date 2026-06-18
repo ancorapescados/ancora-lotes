@@ -532,6 +532,7 @@ tr.highlight td { background:rgba(46,125,107,.08); }
             <button class="btn-add" id="btn_add_venda" onclick="addVenda()">+ Registrar Venda</button>
           </div>
           <button class="btn-novo-peixe" onclick="showNewPeixeModal()">+ Novo Peixe</button>
+          <div id="peixes_toolbar"></div>
           <div id="peixes_inventario"></div>
           <div class="section-label" style="margin-bottom:10px">Vendas Registradas</div>
           <div class="vendas-list" id="vendasList"><div class="empty-vendas">Nenhuma venda registrada</div></div>
@@ -1184,15 +1185,68 @@ async function confirmVenderProcessamento() {
 }
 
 // ── RENDER: Inventário de peixes ──────────────────────────────────────────────
+// ── PERFORMANCE: filtro/busca + thumbnails ────────────────────────────────────
+let filtroInventario = { busca: '', status: 'todos', qualidade: 'todas' };
+
+function thumbUrl(url, size = 160) {
+  if (!url) return url;
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}width=${size}&height=${size}&resize=cover&quality=60`;
+}
+
+function renderToolbarInventario() {
+  const container = el('peixes_toolbar');
+  if (!container) return;
+  container.innerHTML = `
+    <div class="inv-toolbar">
+      <input type="text" id="inv_busca" placeholder="🔍 Buscar por lacre..."
+             value="${filtroInventario.busca}"
+             oninput="onFiltroInventarioChange()" inputmode="numeric">
+      <select id="inv_filtro_status" onchange="onFiltroInventarioChange()">
+        <option value="todos" ${filtroInventario.status==='todos'?'selected':''}>Todos os status</option>
+        <option value="disponivel" ${filtroInventario.status==='disponivel'?'selected':''}>Disponível</option>
+        <option value="processado" ${filtroInventario.status==='processado'?'selected':''}>Processado</option>
+        <option value="esgotado" ${filtroInventario.status==='esgotado'?'selected':''}>Esgotado</option>
+      </select>
+      <select id="inv_filtro_qual" onchange="onFiltroInventarioChange()">
+        <option value="todas" ${filtroInventario.qualidade==='todas'?'selected':''}>Todas qualidades</option>
+        <option value="#1" ${filtroInventario.qualidade==='#1'?'selected':''}>#1</option>
+        <option value="#2+" ${filtroInventario.qualidade==='#2+'?'selected':''}>#2+</option>
+        <option value="#2" ${filtroInventario.qualidade==='#2'?'selected':''}>#2</option>
+        <option value="#2-" ${filtroInventario.qualidade==='#2-'?'selected':''}>#2-</option>
+      </select>
+    </div>
+  `;
+}
+
+function onFiltroInventarioChange() {
+  filtroInventario.busca = el('inv_busca').value.trim();
+  filtroInventario.status = el('inv_filtro_status').value;
+  filtroInventario.qualidade = el('inv_filtro_qual').value;
+  renderInventarioPeixes();
+}
+
+function aplicarFiltro(peixes) {
+  return peixes.filter(p => {
+    if (filtroInventario.busca && !String(p.lacre).includes(filtroInventario.busca)) return false;
+    if (filtroInventario.status !== 'todos' && statusPeixe(p) !== filtroInventario.status) return false;
+    if (filtroInventario.qualidade !== 'todas' && p.qualidade !== filtroInventario.qualidade) return false;
+    return true;
+  });
+}
+
 function renderInventarioPeixes() {
+  renderToolbarInventario();
+
   const container = el('peixes_inventario');
   if (!container) return;
 
   const qualColor = (q) => ({ '#1':'qual-1','#2+':'qual-2p','#2':'qual-2','#2-':'qual-2m' }[q] || 'qual-2');
   const stars = (n) => '★'.repeat(n) + '☆'.repeat(5-n);
 
-  const ativos = peixesDoLote.filter(p => statusPeixe(p) !== 'esgotado');
-  const esgotados = peixesDoLote.filter(p => statusPeixe(p) === 'esgotado');
+  const todosFiltrados = aplicarFiltro(peixesDoLote);
+  const ativos = todosFiltrados.filter(p => statusPeixe(p) !== 'esgotado');
+  const esgotados = todosFiltrados.filter(p => statusPeixe(p) === 'esgotado');
 
   const procCardHTML = (proc) => {
     const pct = proc.peso_gerado > 0 ? (proc.peso_restante/proc.peso_gerado*100) : 0;
@@ -1215,11 +1269,14 @@ function renderInventarioPeixes() {
     const pct = total > 0 ? (restante/total*100) : 0;
     const st = statusPeixe(p);
     const procs = getProcessamentosDoPeixe(p.id);
+    const fotoThumb = p.fotos && p.fotos[0] ? thumbUrl(p.fotos[0], 160) : null;
 
     return `
     <div class="peixe-card ${st === 'esgotado' ? 'peixe-vendido' : ''}">
       <div class="peixe-foto-wrap">
-        ${p.fotos && p.fotos[0] ? `<img src="${p.fotos[0]}" class="peixe-foto" onclick="showFotosPeixe('${p.id}')">` : `<div class="peixe-foto-placeholder">🐟</div>`}
+        ${fotoThumb
+          ? `<img src="${fotoThumb}" class="peixe-foto" loading="lazy" decoding="async" onclick="showFotosPeixe('${p.id}')">`
+          : `<div class="peixe-foto-placeholder">🐟</div>`}
         ${p.fotos && p.fotos.length > 1 ? `<span class="peixe-foto-count">+${p.fotos.length-1}</span>` : ''}
         ${st === 'processado' ? `<span class="peixe-parcial-badge">Processado</span>` : ''}
       </div>
@@ -1253,7 +1310,7 @@ function renderInventarioPeixes() {
   container.innerHTML = `
     <div class="inventario-section">
       <div class="inventario-header"><span>Ativos</span><span class="inventario-count">${ativos.length}</span></div>
-      <div class="peixes-grid">${ativos.length ? ativos.map(cardHTML).join('') : '<div class="peixes-empty">Nenhum peixe disponível</div>'}</div>
+      <div class="peixes-grid">${ativos.length ? ativos.map(cardHTML).join('') : '<div class="peixes-empty">Nenhum peixe encontrado</div>'}</div>
     </div>
     <div class="inventario-section">
       <div class="inventario-header muted"><span>Esgotados</span><span class="inventario-count">${esgotados.length}</span></div>
@@ -2036,6 +2093,27 @@ function renderDashboard() {
 .proc-peso { color: var(--gray); font-family: monospace; }
 .btn-sm { padding: 5px 8px !important; font-size: 11px !important; width: 100%; margin-top: 4px; }
 .proc-esgotado-label { font-size: 10px; color: var(--gray); font-style: italic; }
+
+/* ── Toolbar de busca/filtro ── */
+.inv-toolbar {
+  display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap;
+}
+.inv-toolbar input[type="text"] {
+  flex: 2; min-width: 140px; padding: 10px 14px; border: 1px solid #DDD;
+  border-radius: 6px; font-size: 14px; -webkit-appearance: none;
+}
+.inv-toolbar select {
+  flex: 1; min-width: 110px; padding: 10px 12px; border: 1px solid #DDD;
+  border-radius: 6px; font-size: 13px; background: white;
+  -webkit-appearance: none; appearance: none;
+}
+.inv-toolbar input:focus, .inv-toolbar select:focus { border-color: var(--teal); outline: none; }
+@media (max-width: 480px) {
+  .inv-toolbar { flex-direction: column; }
+  .inv-toolbar input, .inv-toolbar select { width: 100%; }
+}
+.peixe-foto-wrap { background: #EFEDE7; }
+.peixe-foto { background: #EFEDE7; }
 </style>
 
 <!-- ════════════════ MODAL: Vender Inteiro ════════════════ -->
