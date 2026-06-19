@@ -250,6 +250,7 @@ body { background:var(--navy); color:var(--white); font-family:'Outfit',sans-ser
 .venda-info { min-width:0; }
 .venda-cliente { font-weight:500; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:160px; }
 .venda-detail { font-size:10px; color:var(--gray); font-family:'DM Mono',monospace; margin-top:1px; }
+.venda-lacre { font-size:10px; color:var(--teal); font-family:'DM Mono',monospace; font-weight:600; }
 .venda-right { display:flex; align-items:center; gap:8px; flex-shrink:0; }
 .venda-mc { font-family:'DM Mono',monospace; font-size:12px; font-weight:500; white-space:nowrap; }
 .mc-pos { color:var(--green); }
@@ -1110,7 +1111,7 @@ async function confirmVenderInteiro() {
   if (errPeixe) { alert('Erro: ' + errPeixe.message); btn.disabled=false; btn.textContent='Confirmar Venda'; return; }
 
   const { error: errVenda } = await sb.from('vendas').insert({
-    lot_id: activeLotId, kg: peso, preco, preco_efet: preco, receita, custo, mc, cliente, is_cong: isCong,
+    lot_id: activeLotId, kg: peso, preco, preco_efet: preco, receita, custo, mc, cliente, is_cong: isCong, lacre: peixe.lacre,
   });
   if (errVenda) console.error('[vendas legado] erro:', errVenda.message);
 
@@ -1321,10 +1322,12 @@ async function confirmVenderProcessamento() {
   const receita = peso * preco;
   const custo = peso * custoKg;
   const mc = receita - custo;
+  const peixeOrigem = peixesDoLote.find(p => p.id === proc.peixe_id);
+  const lacre = peixeOrigem?.lacre || '';
 
   const { error: errVenda } = await sb.from('vendas_processamento').insert({
     processamento_id: procAcaoId, lot_id: activeLotId,
-    peso, preco, receita, custo, mc, cliente, data_venda: todayISO(), created_by: currentUser.id,
+    peso, preco, receita, custo, mc, cliente, data_venda: todayISO(), created_by: currentUser.id, lacre,
   });
   if (errVenda) { alert('Erro: ' + errVenda.message); btn.disabled=false; btn.textContent='Confirmar Venda'; return; }
 
@@ -1336,7 +1339,7 @@ async function confirmVenderProcessamento() {
   if (errProc) console.error('[processamentos update] erro:', errProc.message);
 
   const { error: errVendaLegado } = await sb.from('vendas').insert({
-    lot_id: activeLotId, kg: peso, preco, preco_efet: preco, receita, custo, mc, cliente, is_cong: false,
+    lot_id: activeLotId, kg: peso, preco, preco_efet: preco, receita, custo, mc, cliente, is_cong: false, lacre,
   });
   if (errVendaLegado) console.error('[vendas legado] erro:', errVendaLegado.message);
 
@@ -1422,15 +1425,17 @@ async function confirmCongelarProcessamento() {
   const custo = peso * custoKg;
   const mc = receita - custo;
   const cliente = 'CONGELADO';
+  const peixeOrigem = peixesDoLote.find(p => p.id === proc.peixe_id);
+  const lacre = peixeOrigem?.lacre || '';
 
   const { error: errVp } = await sb.from('vendas_processamento').insert({
     processamento_id: procCongelarId, lot_id: proc.lot_id,
-    peso, preco, receita, custo, mc, cliente, data_venda: todayISO(), created_by: currentUser.id,
+    peso, preco, receita, custo, mc, cliente, data_venda: todayISO(), created_by: currentUser.id, lacre,
   });
   if (errVp) { alert('Erro: ' + errVp.message); btn.disabled=false; btn.textContent='Confirmar Congelamento'; return; }
 
   const { error: errV } = await sb.from('vendas').insert({
-    lot_id: proc.lot_id, kg: peso, preco, preco_efet: preco, receita, custo, mc, cliente, is_cong: true,
+    lot_id: proc.lot_id, kg: peso, preco, preco_efet: preco, receita, custo, mc, cliente, is_cong: true, lacre,
   });
   if (errV) console.error('[vendas congelado] erro:', errV.message);
 
@@ -1461,7 +1466,7 @@ function renderToolbarInventario() {
   if (!container) return;
   container.innerHTML = `
     <div class="inv-toolbar">
-      <input type="text" id="inv_busca" placeholder="🔍 Buscar por lacre..."
+      <input type="text" id="inv_busca" placeholder="🔍 Buscar por lacre ou cliente..."
              value="${filtroInventario.busca}"
              oninput="onFiltroInventarioChange()" inputmode="numeric">
       <select id="inv_filtro_status" onchange="onFiltroInventarioChange()">
@@ -1490,7 +1495,12 @@ function onFiltroInventarioChange() {
 
 function aplicarFiltro(peixes) {
   return peixes.filter(p => {
-    if (filtroInventario.busca && !String(p.lacre).includes(filtroInventario.busca)) return false;
+    if (filtroInventario.busca) {
+      const busca = filtroInventario.busca.toLowerCase();
+      const matchLacre = String(p.lacre).includes(busca);
+      const matchCliente = p.cliente && p.cliente.toLowerCase().includes(busca);
+      if (!matchLacre && !matchCliente) return false;
+    }
     if (filtroInventario.status !== 'todos' && statusPeixe(p) !== filtroInventario.status) return false;
     if (filtroInventario.qualidade !== 'todas' && p.qualidade !== filtroInventario.qualidade) return false;
     return true;
@@ -1912,7 +1922,7 @@ function renderDetail() {
     listEl.innerHTML = lv.map(v=>`
       <div class="venda-item ${v.is_cong?'is-cong':''}">
         <div class="venda-info">
-          <div class="venda-cliente">${v.is_cong?'❄️ ':''}${v.cliente}</div>
+          <div class="venda-cliente">${v.is_cong?'❄️ ':''}${v.lacre?`<span class="venda-lacre">#${v.lacre}</span> `:''}${v.cliente}</div>
           <div class="venda-detail">${fmtN(v.kg)}kg × ${fmt(v.preco_efet)}/kg</div>
         </div>
         <div class="venda-right">
