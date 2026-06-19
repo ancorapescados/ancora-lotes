@@ -1136,13 +1136,18 @@ async function confirmProcessar() {
   const restante = peixe.peso_restante != null ? peixe.peso_restante : total;
   const consumido = restante * fracao;
 
+  const lot = lots.find(l => l.id === activeLotId);
+  const custoKg = lot.params.custoKg;
+  const custoTotalProcessamento = consumido * custoKg;
+  const custoKgCorte = pesoGerado > 0 ? custoTotalProcessamento / pesoGerado : custoKg;
+
   const btn = el('modalProcessar').querySelector('.btn-confirm');
   btn.disabled = true; btn.textContent = 'Processando…';
 
   const { error: errProc } = await sb.from('processamentos').insert({
     peixe_id: peixeAcaoId, lot_id: activeLotId,
     fracao, tipo_corte: corte, peso_gerado: pesoGerado, peso_restante: pesoGerado,
-    status: 'disponivel', created_by: currentUser.id,
+    status: 'disponivel', custo_kg_corte: custoKgCorte, created_by: currentUser.id,
   });
   if (errProc) { alert('Erro: ' + errProc.message); btn.disabled=false; btn.textContent='Processar'; return; }
 
@@ -1209,7 +1214,7 @@ async function confirmVenderProcessamento() {
   btn.disabled = true; btn.textContent = 'Registrando…';
 
   const lot = lots.find(l => l.id === activeLotId);
-  const custoKg = lot.params.custoKg;
+  const custoKg = proc.custo_kg_corte || lot.params.custoKg;
   const receita = peso * preco;
   const custo = peso * custoKg;
   const mc = receita - custo;
@@ -1310,6 +1315,7 @@ function renderInventarioPeixes() {
         <div class="proc-info">
           <span class="proc-tipo">${proc.tipo_corte}</span>
           <span class="proc-peso">${proc.peso_restante.toFixed(1)}kg / ${proc.peso_gerado.toFixed(1)}kg</span>
+          ${proc.custo_kg_corte ? `<span class="proc-custo">Custo: R$${proc.custo_kg_corte.toFixed(2)}/kg</span>` : ''}
         </div>
         <div class="peixe-restante-bar"><div class="peixe-restante-fill" style="width:${pct}%"></div></div>
         ${!esgotadoProc ? `<button class="btn-vender-peixe btn-sm" onclick="showVenderProcessamentoModal('${proc.id}')">Vender →</button><button class="btn-desfazer-proc btn-sm" onclick="desfazerProcessamento('${proc.id}')">↩ Desfazer</button>` : `<span class="proc-esgotado-label">Esgotado</span>`}
@@ -2192,6 +2198,7 @@ function renderDashboard() {
 .btn-excluir-peixe { background: var(--red) !important; color: #fff !important; border: none; border-radius: 6px; padding: 6px 10px; font-size: 14px; cursor: pointer; flex-shrink: 0; }
 .btn-excluir-peixe:hover { opacity: 0.85; }
 .proc-esgotado-label { font-size: 10px; color: var(--gray); font-style: italic; }
+.proc-custo { font-size: 11px; color: var(--gray); font-style: italic; }
 
 /* ── Toolbar de busca/filtro ── */
 .inv-toolbar {
