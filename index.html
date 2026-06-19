@@ -1070,6 +1070,8 @@ function showVenderInteiroModal(peixeId) {
   el('vi_peso').value = restante.toFixed(1);
   el('vi_cliente').value = '';
   el('vi_preco').value = '';
+  el('vi_cong').checked = false;
+  el('vi_preco_label').textContent = 'Preço/kg (R$)';
 
   const btn = el('modalVenderInteiro').querySelector('.btn-confirm');
   btn.disabled = false; btn.textContent = 'Confirmar Venda';
@@ -1082,10 +1084,11 @@ function hideVenderInteiroModal() { el('modalVenderInteiro').style.display = 'no
 async function confirmVenderInteiro() {
   const corte = el('vi_corte').value;
   const peso = parseFloat(el('vi_peso').value);
-  const cliente = el('vi_cliente').value.trim();
+  const isCong = el('vi_cong').checked;
+  const cliente = isCong ? 'CONGELADO' : el('vi_cliente').value.trim();
   const preco = parseFloat(el('vi_preco').value);
 
-  if (!cliente) { alert('Informe o cliente.'); return; }
+  if (!isCong && !cliente) { alert('Informe o cliente.'); return; }
   if (!preco || preco <= 0) { alert('Informe o preço/kg.'); return; }
   if (!peso || peso <= 0) { alert('Informe o peso.'); return; }
   if (!peixeAcaoId) return;
@@ -1101,12 +1104,13 @@ async function confirmVenderInteiro() {
   const mc = receita - custo;
 
   const { error: errPeixe } = await sb.from('peixes').update({
-    peso_restante: 0, status: 'vendido', cliente, preco_kg: preco, data_venda: todayISO(),
+    peso_restante: 0, status: isCong ? 'esgotado' : 'vendido',
+    cliente, preco_kg: preco, data_venda: todayISO(),
   }).eq('id', peixeAcaoId);
   if (errPeixe) { alert('Erro: ' + errPeixe.message); btn.disabled=false; btn.textContent='Confirmar Venda'; return; }
 
   const { error: errVenda } = await sb.from('vendas').insert({
-    lot_id: activeLotId, kg: peso, preco, preco_efet: preco, receita, custo, mc, cliente, is_cong: false,
+    lot_id: activeLotId, kg: peso, preco, preco_efet: preco, receita, custo, mc, cliente, is_cong: isCong,
   });
   if (errVenda) console.error('[vendas legado] erro:', errVenda.message);
 
@@ -1342,6 +1346,106 @@ async function confirmVenderProcessamento() {
   hideVenderProcessamentoModal();
 }
 
+// ── MODAL: Reprocessar (Filé → Lombo) ────────────────────────────────────────
+let procReprocessarId = null;
+
+function showReprocessarModal(procId) {
+  const proc = processamentosDoLote.find(p => p.id === procId);
+  if (!proc) return;
+  procReprocessarId = procId;
+  el('rp_label').textContent = `${proc.tipo_corte} · ${proc.peso_restante.toFixed(1)}kg disponíveis`;
+  el('rp_peso_gerado').value = '';
+  el('modalReprocessar').style.display = 'flex';
+  setTimeout(() => el('rp_peso_gerado').focus(), 100);
+}
+function hideReprocessarModal() { el('modalReprocessar').style.display = 'none'; procReprocessarId = null; }
+
+async function confirmReprocessar() {
+  const pesoGerado = parseFloat(el('rp_peso_gerado').value);
+  if (!pesoGerado || pesoGerado <= 0) { alert('Informe o peso real do Lombo produzido.'); return; }
+  if (!procReprocessarId) return;
+
+  const proc = processamentosDoLote.find(p => p.id === procReprocessarId);
+  if (!proc) return;
+
+  const btn = el('modalReprocessar').querySelector('.btn-confirm');
+  btn.disabled = true; btn.textContent = 'Processando…';
+
+  const { error: errNew } = await sb.from('processamentos').insert({
+    peixe_id: proc.peixe_id, lot_id: proc.lot_id,
+    fracao: 1.0, tipo_corte: 'Lombo',
+    peso_gerado: pesoGerado, peso_restante: pesoGerado,
+    status: 'disponivel', custo_kg_corte: proc.custo_kg_corte,
+    created_by: currentUser.id,
+  });
+  if (errNew) { alert('Erro: ' + errNew.message); btn.disabled=false; btn.textContent='Confirmar'; return; }
+
+  await sb.from('processamentos').update({ peso_restante: 0, status: 'esgotado' }).eq('id', procReprocessarId);
+
+  await loadProcessamentosDoLote(activeLotId);
+  renderDetail();
+  hideReprocessarModal();
+}
+
+// ── MODAL: Congelar Processamento (Lombo) ─────────────────────────────────────
+let procCongelarId = null;
+
+function showCongelarProcessamentoModal(procId) {
+  const proc = processamentosDoLote.find(p => p.id === procId);
+  if (!proc) return;
+  procCongelarId = procId;
+  el('cp_label').textContent = `${proc.tipo_corte} · ${proc.peso_restante.toFixed(1)}kg disponíveis`;
+  el('cp_peso').value = proc.peso_restante.toFixed(1);
+  el('cp_preco').value = '';
+  const btn = el('modalCongelarProcessamento').querySelector('.btn-confirm');
+  btn.disabled = false; btn.textContent = 'Confirmar Congelamento';
+  el('modalCongelarProcessamento').style.display = 'flex';
+  setTimeout(() => el('cp_preco').focus(), 100);
+}
+function hideCongelarProcessamentoModal() { el('modalCongelarProcessamento').style.display = 'none'; procCongelarId = null; }
+
+async function confirmCongelarProcessamento() {
+  const peso = parseFloat(el('cp_peso').value);
+  const preco = parseFloat(el('cp_preco').value);
+  if (!peso || peso <= 0) { alert('Informe o peso a congelar.'); return; }
+  if (!preco || preco <= 0) { alert('Informe o preço do congelado.'); return; }
+  if (!procCongelarId) return;
+
+  const proc = processamentosDoLote.find(p => p.id === procCongelarId);
+  if (!proc) return;
+
+  const btn = el('modalCongelarProcessamento').querySelector('.btn-confirm');
+  btn.disabled = true; btn.textContent = 'Registrando…';
+
+  const custoKg = proc.custo_kg_corte || lots.find(l => l.id === activeLotId)?.params.custoKg || 0;
+  const receita = peso * preco;
+  const custo = peso * custoKg;
+  const mc = receita - custo;
+  const cliente = 'CONGELADO';
+
+  const { error: errVp } = await sb.from('vendas_processamento').insert({
+    processamento_id: procCongelarId, lot_id: proc.lot_id,
+    peso, preco, receita, custo, mc, cliente, data_venda: todayISO(), created_by: currentUser.id,
+  });
+  if (errVp) { alert('Erro: ' + errVp.message); btn.disabled=false; btn.textContent='Confirmar Congelamento'; return; }
+
+  const { error: errV } = await sb.from('vendas').insert({
+    lot_id: proc.lot_id, kg: peso, preco, preco_efet: preco, receita, custo, mc, cliente, is_cong: true,
+  });
+  if (errV) console.error('[vendas congelado] erro:', errV.message);
+
+  const novoRestante = Math.max(0, proc.peso_restante - peso);
+  await sb.from('processamentos').update({
+    peso_restante: novoRestante,
+    status: novoRestante <= 0.01 ? 'congelado' : 'disponivel',
+  }).eq('id', procCongelarId);
+
+  await loadProcessamentosDoLote(activeLotId);
+  await loadData();
+  renderDetail();
+  hideCongelarProcessamentoModal();
+}
+
 // ── RENDER: Inventário de peixes ──────────────────────────────────────────────
 // ── PERFORMANCE: filtro/busca + thumbnails ────────────────────────────────────
 let filtroInventario = { busca: '', status: 'todos', qualidade: 'todas' };
@@ -1417,7 +1521,12 @@ function renderInventarioPeixes() {
           ${proc.custo_kg_corte ? `<span class="proc-custo">Custo: R$${proc.custo_kg_corte.toFixed(2)}/kg</span>` : ''}
         </div>
         <div class="peixe-restante-bar"><div class="peixe-restante-fill" style="width:${pct}%"></div></div>
-        ${!esgotadoProc ? `<button class="btn-vender-peixe btn-sm" onclick="showVenderProcessamentoModal('${proc.id}')">Vender →</button><button class="btn-desfazer-proc btn-sm" onclick="desfazerProcessamento('${proc.id}')">↩ Desfazer</button>` : `<span class="proc-esgotado-label">Esgotado</span>`}
+        ${!esgotadoProc ? `
+          <button class="btn-vender-peixe btn-sm" onclick="showVenderProcessamentoModal('${proc.id}')">Vender →</button>
+          ${proc.tipo_corte === 'Filé' ? `<button class="btn-reprocessar btn-sm" onclick="showReprocessarModal('${proc.id}')">↪ Lombo</button>` : ''}
+          ${proc.tipo_corte === 'Lombo' ? `<button class="btn-congelar-proc btn-sm" onclick="showCongelarProcessamentoModal('${proc.id}')">❄️ Congelar</button>` : ''}
+          <button class="btn-desfazer-proc btn-sm" onclick="desfazerProcessamento('${proc.id}')">↩ Desfazer</button>
+        ` : `<span class="proc-esgotado-label">${proc.status === 'congelado' ? '❄️ Congelado' : 'Esgotado'}</span>`}
       </div>
     `;
   };
@@ -2328,6 +2437,12 @@ function renderDashboard() {
 .conc-sobra span:last-child { color: var(--green); }
 .conc-quebra span:last-child { color: var(--red); }
 .conc-custo span:last-child { color: var(--gold); }
+.btn-reprocessar { background: var(--gold) !important; color: #2A2410 !important; }
+.btn-reprocessar:hover { opacity: 0.85; }
+.btn-congelar-proc { background: #4A90D9 !important; color: #fff !important; }
+.btn-congelar-proc:hover { opacity: 0.85; }
+.cong-check-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--gray); margin: 8px 0 4px; cursor: pointer; }
+.cong-check-row input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--teal); cursor: pointer; }
 
 /* ── Toolbar de busca/filtro ── */
 .inv-toolbar {
@@ -2370,10 +2485,14 @@ function renderDashboard() {
         <input type="number" id="vi_peso" step="0.1" inputmode="decimal">
       </div>
       <div class="peixe-form-field">
-        <label>Preço/kg (R$)</label>
+        <label id="vi_preco_label">Preço/kg (R$)</label>
         <input type="number" id="vi_preco" placeholder="60.00" step="0.01" inputmode="decimal">
       </div>
     </div>
+    <label class="cong-check-row">
+      <input type="checkbox" id="vi_cong" onchange="el('vi_preco_label').textContent = this.checked ? 'Preço do congelado (R$/kg)' : 'Preço/kg (R$)'">
+      <span>Congelar (não vender fresco)</span>
+    </label>
     <div class="modal-actions">
       <button class="btn-cancel" onclick="hideVenderInteiroModal()">Cancelar</button>
       <button class="btn-confirm" onclick="confirmVenderInteiro()">Confirmar Venda</button>
@@ -2475,6 +2594,46 @@ function renderDashboard() {
     <div class="modal-actions">
       <button class="btn-cancel" onclick="hideAdicionarFotosModal()">Cancelar</button>
       <button class="btn-confirm" onclick="saveAdicionarFotos()">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════ MODAL: Reprocessar ════════════════ -->
+<div class="modal-overlay" id="modalReprocessar" style="display:none" onclick="if(event.target===this)hideReprocessarModal()">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-title">↪ Reprocessar em Lombo</div>
+    <div id="rp_label" style="font-size:13px;color:var(--gray);margin-bottom:16px;"></div>
+    <div class="peixe-form-grid" style="grid-template-columns:1fr;">
+      <div class="peixe-form-field">
+        <label>Peso real do Lombo produzido (kg) — pesado na balança</label>
+        <input type="number" id="rp_peso_gerado" step="0.1" inputmode="decimal" placeholder="Peso real produzido">
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="hideReprocessarModal()">Cancelar</button>
+      <button class="btn-confirm" onclick="confirmReprocessar()">Confirmar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════ MODAL: Congelar Processamento ════════════════ -->
+<div class="modal-overlay" id="modalCongelarProcessamento" style="display:none" onclick="if(event.target===this)hideCongelarProcessamentoModal()">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-title">❄️ Congelar Lombo</div>
+    <div id="cp_label" style="font-size:13px;color:var(--gray);margin-bottom:16px;"></div>
+    <div class="peixe-form-grid" style="grid-template-columns:1fr;">
+      <div class="peixe-form-field">
+        <label>Peso a congelar (kg)</label>
+        <input type="number" id="cp_peso" step="0.1" inputmode="decimal">
+      </div>
+      <div class="peixe-form-field">
+        <label>Preço do congelado (R$/kg)</label>
+        <input type="number" id="cp_preco" placeholder="18.00" step="0.01" inputmode="decimal">
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="hideCongelarProcessamentoModal()">Cancelar</button>
+      <button class="btn-confirm" onclick="confirmCongelarProcessamento()">Confirmar Congelamento</button>
     </div>
   </div>
 </div>
