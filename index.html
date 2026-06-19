@@ -1562,47 +1562,36 @@ async function removeVenda(vendaId) {
   const venda = vendas.find(v=>v.id===vendaId);
   if (!venda) return;
 
+  const lotId = venda.lot_id;
+
   await sb.from('vendas').delete().eq('id', vendaId);
   vendas = vendas.filter(v=>v.id!==vendaId);
 
-  // Tenta reverter em vendas_processamento (match por lot_id + peso + cliente)
-  const { data: vpRows } = await sb.from('vendas_processamento')
-    .select('*')
-    .eq('lot_id', venda.lot_id)
+  // Tenta encontrar em vendas_processamento
+  const { data: vp } = await sb.from('vendas_processamento')
+    .select('id, peso, processamento_id')
+    .eq('lot_id', lotId)
     .eq('peso', venda.kg)
     .eq('cliente', venda.cliente)
-    .limit(1);
+    .maybeSingle();
 
-  if (vpRows && vpRows.length > 0) {
-    const vp = vpRows[0];
+  if (vp) {
     await sb.from('vendas_processamento').delete().eq('id', vp.id);
-    const { data: procRows } = await sb.from('processamentos')
-      .select('peso_restante').eq('id', vp.processamento_id).limit(1);
-    if (procRows && procRows.length > 0) {
-      const novoRestante = (procRows[0].peso_restante || 0) + venda.kg;
-      await sb.from('processamentos').update({
-        peso_restante: novoRestante,
-        status: novoRestante > 0 ? 'disponivel' : 'esgotado',
-      }).eq('id', vp.processamento_id);
+    const { data: proc } = await sb.from('processamentos').select('peso_restante').eq('id', vp.processamento_id).single();
+    if (proc) {
+      const novoRestante = (proc.peso_restante || 0) + vp.peso;
+      await sb.from('processamentos').update({ peso_restante: novoRestante, status: 'disponivel' }).eq('id', vp.processamento_id);
     }
-    await loadProcessamentosDoLote(activeLotId);
-    await loadVendasProcDoLote(activeLotId);
   } else {
-    // Tenta reverter em peixes (match por lot_id + cliente + peso_sc = kg)
-    const { data: peixeRows } = await sb.from('peixes')
-      .select('*')
-      .eq('lot_id', venda.lot_id)
+    // Tenta encontrar em peixes direto (venda de inteiro)
+    const { data: px } = await sb.from('peixes')
+      .select('id, peso_restante')
+      .eq('lot_id', lotId)
       .eq('cliente', venda.cliente)
-      .eq('peso_sc', venda.kg)
-      .limit(1);
-    if (peixeRows && peixeRows.length > 0) {
-      const peixe = peixeRows[0];
-      const novoRestante = (peixe.peso_restante || 0) + venda.kg;
-      await sb.from('peixes').update({
-        peso_restante: novoRestante,
-        status: 'disponivel',
-      }).eq('id', peixe.id);
-      await loadPeixesDoLote(activeLotId);
+      .maybeSingle();
+    if (px) {
+      const novoRestante = (px.peso_restante || 0) + venda.kg;
+      await sb.from('peixes').update({ peso_restante: novoRestante, status: 'disponivel' }).eq('id', px.id);
     }
   }
 
