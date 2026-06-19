@@ -829,6 +829,13 @@ function showNewPeixeModal() {
   fotosTemp = [];
   renderFotosPreview();
   el('modalNewPeixe').style.display = 'flex';
+  const lacresNumericos = peixesDoLote
+    .map(p => parseInt(p.lacre))
+    .filter(n => !isNaN(n));
+  const proximoLacre = lacresNumericos.length > 0
+    ? (Math.max(...lacresNumericos) + 1).toString()
+    : '';
+  el('px_lacre').value = proximoLacre;
   setTimeout(()=>el('px_lacre').focus(), 100);
 }
 function hidePeixeModal() {
