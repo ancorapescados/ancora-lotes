@@ -947,6 +947,33 @@ function getVendasDoProcessamento(procId) {
   return vendasProcDoLote.filter(v => v.processamento_id === procId);
 }
 
+async function desfazerProcessamento(procId) {
+  const { data: vendas_proc } = await sb.from('vendas_processamento')
+    .select('id').eq('processamento_id', procId).limit(1);
+  if (vendas_proc && vendas_proc.length > 0) {
+    alert('Não é possível desfazer — este corte já tem vendas registradas.');
+    return;
+  }
+
+  const { data: proc } = await sb.from('processamentos')
+    .select('peixe_id, fracao, peso_gerado').eq('id', procId).single();
+  if (!proc) return;
+
+  await sb.from('processamentos').delete().eq('id', procId);
+
+  const { data: peixe } = await sb.from('peixes')
+    .select('id, peso_cc, peso_sc, peso_restante').eq('id', proc.peixe_id).single();
+  if (peixe) {
+    const pesoRef = peixe.peso_cc || peixe.peso_sc || 0;
+    const novoRestante = (peixe.peso_restante || 0) + (pesoRef * proc.fracao);
+    await sb.from('peixes').update({ peso_restante: novoRestante, status: 'disponivel' }).eq('id', peixe.id);
+  }
+
+  await loadPeixesDoLote(activeLotId);
+  await loadProcessamentosDoLote(activeLotId);
+  renderDetail();
+}
+
 // ── STATUS HELPERS ───────────────────────────────────────────────────────────
 function statusPeixe(p) {
   const procs = getProcessamentosDoPeixe(p.id);
@@ -1258,7 +1285,7 @@ function renderInventarioPeixes() {
           <span class="proc-peso">${proc.peso_restante.toFixed(1)}kg / ${proc.peso_gerado.toFixed(1)}kg</span>
         </div>
         <div class="peixe-restante-bar"><div class="peixe-restante-fill" style="width:${pct}%"></div></div>
-        ${!esgotadoProc ? `<button class="btn-vender-peixe btn-sm" onclick="showVenderProcessamentoModal('${proc.id}')">Vender →</button>` : `<span class="proc-esgotado-label">Esgotado</span>`}
+        ${!esgotadoProc ? `<button class="btn-vender-peixe btn-sm" onclick="showVenderProcessamentoModal('${proc.id}')">Vender →</button><button class="btn-desfazer-proc btn-sm" onclick="desfazerProcessamento('${proc.id}')">↩ Desfazer</button>` : `<span class="proc-esgotado-label">Esgotado</span>`}
       </div>
     `;
   };
@@ -2127,6 +2154,8 @@ function renderDashboard() {
 .proc-tipo { font-weight: 600; color: var(--ink); }
 .proc-peso { color: var(--gray); font-family: monospace; }
 .btn-sm { padding: 5px 8px !important; font-size: 11px !important; width: 100%; margin-top: 4px; }
+.btn-desfazer-proc { background: var(--gray) !important; color: #fff !important; }
+.btn-desfazer-proc:hover { background: #888 !important; }
 .proc-esgotado-label { font-size: 10px; color: var(--gray); font-style: italic; }
 
 /* ── Toolbar de busca/filtro ── */
