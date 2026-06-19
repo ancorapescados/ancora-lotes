@@ -1558,8 +1558,54 @@ async function addVenda() {
 async function removeVenda(vendaId) {
   const lot = lots.find(l=>l.id===activeLotId);
   if (!lot||lot.closed) return;
+
+  const venda = vendas.find(v=>v.id===vendaId);
+  if (!venda) return;
+
   await sb.from('vendas').delete().eq('id', vendaId);
   vendas = vendas.filter(v=>v.id!==vendaId);
+
+  // Tenta reverter em vendas_processamento (match por lot_id + peso + cliente)
+  const { data: vpRows } = await sb.from('vendas_processamento')
+    .select('*')
+    .eq('lot_id', venda.lot_id)
+    .eq('peso', venda.kg)
+    .eq('cliente', venda.cliente)
+    .limit(1);
+
+  if (vpRows && vpRows.length > 0) {
+    const vp = vpRows[0];
+    await sb.from('vendas_processamento').delete().eq('id', vp.id);
+    const { data: procRows } = await sb.from('processamentos')
+      .select('peso_restante').eq('id', vp.processamento_id).limit(1);
+    if (procRows && procRows.length > 0) {
+      const novoRestante = (procRows[0].peso_restante || 0) + venda.kg;
+      await sb.from('processamentos').update({
+        peso_restante: novoRestante,
+        status: novoRestante > 0 ? 'disponivel' : 'esgotado',
+      }).eq('id', vp.processamento_id);
+    }
+    await loadProcessamentosDoLote(activeLotId);
+    await loadVendasProcDoLote(activeLotId);
+  } else {
+    // Tenta reverter em peixes (match por lot_id + cliente + peso_sc = kg)
+    const { data: peixeRows } = await sb.from('peixes')
+      .select('*')
+      .eq('lot_id', venda.lot_id)
+      .eq('cliente', venda.cliente)
+      .eq('peso_sc', venda.kg)
+      .limit(1);
+    if (peixeRows && peixeRows.length > 0) {
+      const peixe = peixeRows[0];
+      const novoRestante = (peixe.peso_restante || 0) + venda.kg;
+      await sb.from('peixes').update({
+        peso_restante: novoRestante,
+        status: 'disponivel',
+      }).eq('id', peixe.id);
+      await loadPeixesDoLote(activeLotId);
+    }
+  }
+
   renderDetail();
 }
 
