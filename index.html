@@ -749,7 +749,11 @@ function computeLot(lot) {
   const p = lot.params;
   const lv = getLotVendas(lot.id);
   const despesas       = lot.despesas_adicionais || 0;
-  const custoTotal     = p.kgTotal * p.custoKg;
+  const pesoIndividual = peixesDoLote.filter(px => px.lot_id === lot.id).reduce((s, px) => s + (px.peso_cc || 0), 0);
+  const valorNF        = p.kgTotal * p.custoKg;
+  const custoKgReal    = pesoIndividual > 0 ? valorNF / pesoIndividual : p.custoKg;
+  const difPeso        = pesoIndividual - p.kgTotal;
+  const custoTotal     = valorNF;
   const custoTotalComDesp = custoTotal + despesas;
   const recNecessaria  = custoTotalComDesp / (1 - p.metaMC/100);
   const mcNecessaria   = recNecessaria - custoTotalComDesp;
@@ -760,22 +764,22 @@ function computeLot(lot) {
   const kgFrescos      = lv.filter(v=>!v.is_cong).reduce((s,v)=>s+v.kg,0);
   const recFrescos     = lv.filter(v=>!v.is_cong).reduce((s,v)=>s+v.receita,0);
   const kgRest         = Math.max(0, p.kgTotal - kgVendidos);
-  const custoRest      = kgRest * p.custoKg;
+  const custoRest      = kgRest * custoKgReal;
   const progPct        = mcNecessaria > 0 ? Math.min(100,(mcAcum/mcNecessaria)*100) : 0;
   const margemAtual    = recAcum > 0 ? (mcAcum/recAcum)*100 : 0;
-  const mcKgFresco     = kgFrescos > 0 ? (recFrescos - kgFrescos*p.custoKg)/kgFrescos : 0;
+  const mcKgFresco     = kgFrescos > 0 ? (recFrescos - kgFrescos*custoKgReal)/kgFrescos : 0;
   // MC/kgD — penaliza congelamento, usa kg TOTAL do lote no denominador
   const mcKgD          = p.kgTotal > 0 ? mcAcum / p.kgTotal : 0;
   const mcFaltante     = Math.max(0, mcNecessaria - mcAcum);
   const precoMinMeta   = kgRest > 0 ? (custoRest + mcFaltante)/kgRest : null;
-  const precoMinBE     = p.custoKg / (1 - p.metaMC/100);
+  const precoMinBE     = custoKgReal / (1 - p.metaMC/100);
   const kgCongEfet     = kgRest * (1 - p.perdaCong/100);
   const recCong        = kgCongEfet * p.precoCong;
-  const mcCong         = recCong - (kgRest * p.custoKg);
+  const mcCong         = recCong - (kgRest * custoKgReal);
   const mcFinalCong    = mcAcum + mcCong;
   const recTotCong     = recAcum + recCong;
   const mgFinalCong    = recTotCong > 0 ? (mcFinalCong/recTotCong)*100 : 0;
-  return { custoTotal,custoTotalComDesp,despesas,mcNecessaria,recNecessaria,kgVendidos,recAcum,mcAcum,mcAcumBruta,kgFrescos,kgRest,progPct,margemAtual,mcKgFresco,mcKgD,mcFaltante,precoMinMeta,precoMinBE,kgCongEfet,recCong,mcCong,mcFinalCong,mgFinalCong };
+  return { custoTotal,custoTotalComDesp,despesas,mcNecessaria,recNecessaria,kgVendidos,recAcum,mcAcum,mcAcumBruta,kgFrescos,kgRest,progPct,margemAtual,mcKgFresco,mcKgD,mcFaltante,precoMinMeta,precoMinBE,kgCongEfet,recCong,mcCong,mcFinalCong,mgFinalCong,pesoIndividual,valorNF,custoKgReal,difPeso };
 }
 
 // ── PEIXES: state ────────────────────────────────────────────────────────────
@@ -1137,9 +1141,10 @@ async function confirmProcessar() {
   const consumido = restante * fracao;
 
   const lot = lots.find(l => l.id === activeLotId);
-  const custoKg = lot.params.custoKg;
-  const custoTotalProcessamento = consumido * custoKg;
-  const custoKgCorte = pesoGerado > 0 ? custoTotalProcessamento / pesoGerado : custoKg;
+  const c = computeLot(lot);
+  const custoKgReal = c.custoKgReal;
+  const custoTotalProcessamento = consumido * custoKgReal;
+  const custoKgCorte = pesoGerado > 0 ? custoTotalProcessamento / pesoGerado : custoKgReal;
 
   const btn = el('modalProcessar').querySelector('.btn-confirm');
   btn.disabled = true; btn.textContent = 'Processando…';
@@ -1718,7 +1723,7 @@ function renderDetail() {
   const scenarios = [-20,-10,-5,0,5,10,20,35].map(delta=>{
     const pr  = c.precoMinBE*(1+delta/100);
     const rec = c.kgRest*pr;
-    const mc2 = c.mcAcum+rec-(c.kgRest*p.custoKg);
+    const mc2 = c.mcAcum+rec-(c.kgRest*c.custoKgReal);
     const rt  = c.recAcum+rec;
     const mg  = rt>0?(mc2/rt)*100:0;
     const vs  = c.mcNecessaria>0?(mc2/c.mcNecessaria)*100:0;
@@ -1757,6 +1762,25 @@ function renderDetail() {
       <div class="kpi" style="--accent:${c.margemAtual>=p.metaMC?'var(--green)':c.margemAtual>=p.metaMC*.7?'var(--warn)':'var(--red)'}"><div class="kpi-label">Margem Atual</div><div class="kpi-value" style="color:${c.margemAtual>=p.metaMC?'var(--green)':c.margemAtual>=p.metaMC*.7?'var(--warn)':'var(--red)'}">${fmtN(c.margemAtual)}%</div><div class="kpi-sub">meta: ${fmtN(p.metaMC)}%</div></div>
       <div class="kpi" style="--accent:var(--teal-dark)"><div class="kpi-label">MC/kg Fresco</div><div class="kpi-value">${fmt(c.mcKgFresco)}</div><div class="kpi-sub">média vendas frescas</div></div>
     </div>
+    ${c.pesoIndividual > 0 ? `
+    <div class="conciliacao-panel">
+      <div class="conc-row">
+        <span>Peso NF</span>
+        <span>${fmtN(p.kgTotal)} kg</span>
+      </div>
+      <div class="conc-row">
+        <span>Peso individual</span>
+        <span>${fmtN(c.pesoIndividual)} kg</span>
+      </div>
+      <div class="conc-row ${c.difPeso >= 0 ? 'conc-sobra' : 'conc-quebra'}">
+        <span>Diferença</span>
+        <span>${c.difPeso >= 0 ? '+' : ''}${fmtN(c.difPeso)} kg</span>
+      </div>
+      <div class="conc-row conc-custo">
+        <span>Custo/kg real</span>
+        <span>R$ ${c.custoKgReal.toFixed(2)}/kg</span>
+      </div>
+    </div>` : ''}
     <div class="prog-section">
       <div class="prog-header"><div class="prog-title">Meta de MC atingida</div><div class="prog-pct" style="color:${pc}">${fmtN(c.progPct)}%</div></div>
       <div class="prog-track"><div class="prog-fill" style="width:${Math.min(100,c.progPct)}%;background:${pc}"></div></div>
@@ -1766,8 +1790,8 @@ function renderDetail() {
       <div class="info-card"><h3>Orientação de Preço</h3>
         <div class="price-row"><span class="pr-label">Preço mínimo (meta ${fmtN(p.metaMC)}%)</span><span class="pr-value" style="color:var(--gold)">${fmt(c.precoMinBE)}/kg</span></div>
         <div class="price-row"><span class="pr-label">Mínimo p/ meta nos restantes</span><span class="pr-value" style="color:${c.precoMinMeta===null?'var(--gray)':c.precoMinMeta<=p.precoCong?'var(--green)':c.precoMinMeta<=c.precoMinBE?'var(--warn)':'var(--white)'}">${c.precoMinMeta!==null?fmt(c.precoMinMeta)+'/kg':c.kgRest===0?'Finalizado':'—'}</span></div>
-        <div class="price-row"><span class="pr-label">Break-even absoluto</span><span class="pr-value" style="color:var(--gray2)">${fmt(p.custoKg)}/kg</span></div>
-        <div class="price-row"><span class="pr-label">MC do congelado</span><span class="pr-value" style="color:var(--red)">${fmt(p.precoCong*(1-p.perdaCong/100)-p.custoKg)}/kg</span></div>
+        <div class="price-row"><span class="pr-label">Break-even absoluto</span><span class="pr-value" style="color:var(--gray2)">${fmt(c.custoKgReal)}/kg</span></div>
+        <div class="price-row"><span class="pr-label">MC do congelado</span><span class="pr-value" style="color:var(--red)">${fmt(p.precoCong*(1-p.perdaCong/100)-c.custoKgReal)}/kg</span></div>
       </div>
       <div class="info-card"><h3>Se Congelar o Restante</h3>
         <div class="price-row"><span class="pr-label">Kg restantes frescos</span><span class="pr-value">${fmtN(c.kgRest)} kg</span></div>
@@ -2199,6 +2223,14 @@ function renderDashboard() {
 .btn-excluir-peixe:hover { opacity: 0.85; }
 .proc-esgotado-label { font-size: 10px; color: var(--gray); font-style: italic; }
 .proc-custo { font-size: 11px; color: var(--gray); font-style: italic; }
+.conciliacao-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; margin: 12px 0; }
+.conc-row { display: flex; justify-content: space-between; font-size: 13px; padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+.conc-row:last-child { border-bottom: none; }
+.conc-row span:first-child { color: var(--gray); }
+.conc-row span:last-child { font-family: monospace; font-weight: 600; }
+.conc-sobra span:last-child { color: var(--green); }
+.conc-quebra span:last-child { color: var(--red); }
+.conc-custo span:last-child { color: var(--gold); }
 
 /* ── Toolbar de busca/filtro ── */
 .inv-toolbar {
