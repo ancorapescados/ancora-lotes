@@ -855,6 +855,36 @@ function removeFotoTemp(idx) {
   renderFotosPreview();
 }
 
+let fotosTemp2 = []; // modal reclassificar
+function handleFotoSelect2(input) {
+  fotosTemp2 = fotosTemp2.concat(Array.from(input.files || []));
+  renderFotosPreview2(); input.value = '';
+}
+function removeFotoTemp2(idx) { fotosTemp2.splice(idx, 1); renderFotosPreview2(); }
+function renderFotosPreview2() {
+  const container = el('px_fotos_preview2');
+  if (!container) return;
+  if (fotosTemp2.length === 0) { container.innerHTML = '<div class="fotos-empty">Nenhuma foto adicionada</div>'; return; }
+  container.innerHTML = fotosTemp2.map((f, i) => `
+    <div class="foto-thumb"><img src="${URL.createObjectURL(f)}" alt="foto ${i+1}"><button class="foto-remove" onclick="removeFotoTemp2(${i})">✕</button></div>
+  `).join('');
+}
+
+let fotosTemp3 = []; // modal processar
+function handleFotoSelect3(input) {
+  fotosTemp3 = fotosTemp3.concat(Array.from(input.files || []));
+  renderFotosPreview3(); input.value = '';
+}
+function removeFotoTemp3(idx) { fotosTemp3.splice(idx, 1); renderFotosPreview3(); }
+function renderFotosPreview3() {
+  const container = el('px_fotos_preview3');
+  if (!container) return;
+  if (fotosTemp3.length === 0) { container.innerHTML = '<div class="fotos-empty">Nenhuma foto adicionada</div>'; return; }
+  container.innerHTML = fotosTemp3.map((f, i) => `
+    <div class="foto-thumb"><img src="${URL.createObjectURL(f)}" alt="foto ${i+1}"><button class="foto-remove" onclick="removeFotoTemp3(${i})">✕</button></div>
+  `).join('');
+}
+
 function renderFotosPreview() {
   const container = el('px_fotos_preview');
   if (!container) return;
@@ -1086,6 +1116,49 @@ async function confirmVenderInteiro() {
   hideVenderInteiroModal();
 }
 
+// ── MODAL: Adicionar Fotos / Reclassificar ────────────────────────────────────
+let peixeReclassId = null;
+
+function showAdicionarFotosModal(peixeId) {
+  const peixe = peixesDoLote.find(p => p.id === peixeId);
+  if (!peixe) return;
+  peixeReclassId = peixeId;
+  fotosTemp2 = [];
+  el('rf_qualidade').value = peixe.qualidade || '#2';
+  el('rf_estrelas').value = (peixe.estrelas || 3).toString();
+  renderFotosPreview2();
+  el('modalAdicionarFotos').style.display = 'flex';
+}
+function hideAdicionarFotosModal() {
+  el('modalAdicionarFotos').style.display = 'none';
+  peixeReclassId = null; fotosTemp2 = [];
+}
+
+async function saveAdicionarFotos() {
+  const peixe = peixesDoLote.find(p => p.id === peixeReclassId);
+  if (!peixe) return;
+  const qualidade = el('rf_qualidade').value;
+  const estrelas = parseInt(el('rf_estrelas').value) || 3;
+  const btn = el('modalAdicionarFotos').querySelector('.btn-confirm');
+  btn.disabled = true; btn.textContent = 'Salvando…';
+
+  const novasUrls = [];
+  for (const file of fotosTemp2) {
+    const url = await uploadFotoPeixe(file, peixe.lot_id, peixe.lacre);
+    if (url) novasUrls.push(url);
+  }
+
+  const fotosAtualizadas = [...(peixe.fotos || []), ...novasUrls];
+  const { error } = await sb.from('peixes')
+    .update({ fotos: fotosAtualizadas, qualidade, estrelas })
+    .eq('id', peixeReclassId);
+  if (error) { alert('Erro ao salvar: ' + error.message); btn.disabled = false; btn.textContent = 'Salvar'; return; }
+
+  await loadPeixesDoLote(activeLotId);
+  renderDetail();
+  hideAdicionarFotosModal();
+}
+
 // ── MODAL: Processar ──────────────────────────────────────────────────────────
 function showProcessarModal(peixeId) {
   const peixe = peixesDoLote.find(p => p.id === peixeId);
@@ -1114,10 +1187,12 @@ function showProcessarModal(peixeId) {
 
   el('pr_peso_gerado').value = '';
   updateRendimentoProcessamento();
+  fotosTemp3 = [];
+  renderFotosPreview3();
 
   el('modalProcessar').style.display = 'flex';
 }
-function hideProcessarModal() { el('modalProcessar').style.display = 'none'; peixeAcaoId = null; }
+function hideProcessarModal() { el('modalProcessar').style.display = 'none'; peixeAcaoId = null; fotosTemp3 = []; }
 
 function updateRendimentoProcessamento() {
   const peixe = peixesDoLote.find(p => p.id === peixeAcaoId);
@@ -1169,6 +1244,18 @@ async function confirmProcessar() {
     status: novoRestante <= 0.01 ? 'esgotado' : 'processado',
   }).eq('id', peixeAcaoId);
   if (errPeixe) { alert('Processamento criado, mas houve erro ao atualizar o peixe: ' + errPeixe.message); }
+
+  if (fotosTemp3.length > 0) {
+    const novasUrls = [];
+    for (const file of fotosTemp3) {
+      const url = await uploadFotoPeixe(file, activeLotId, `${peixe.lacre}_proc`);
+      if (url) novasUrls.push(url);
+    }
+    if (novasUrls.length > 0) {
+      await sb.from('peixes').update({ fotos: [...(peixe.fotos || []), ...novasUrls] }).eq('id', peixeAcaoId);
+    }
+    fotosTemp3 = [];
+  }
 
   await loadPeixesDoLote(activeLotId);
   await loadProcessamentosDoLote(activeLotId);
@@ -1376,6 +1463,7 @@ function renderInventarioPeixes() {
         ${st !== 'esgotado' ? `
           <div class="peixe-edit-row">
             <button class="btn-editar-peixe-full" onclick="showEditPeixeModal('${p.id}')">✏️ Editar peixe</button>
+            <button class="btn-reclassificar-peixe" onclick="showAdicionarFotosModal('${p.id}')">📷</button>
             ${st === 'disponivel' && procs.length === 0 ? `<button class="btn-excluir-peixe" onclick="excluirPeixe('${p.id}')">🗑</button>` : ''}
           </div>` : ''}
       </div>
@@ -2228,6 +2316,8 @@ function renderDashboard() {
 .peixe-edit-row .btn-editar-peixe-full { flex: 1; margin-top: 0; }
 .btn-excluir-peixe { background: var(--red) !important; color: #fff !important; border: none; border-radius: 6px; padding: 6px 10px; font-size: 14px; cursor: pointer; flex-shrink: 0; }
 .btn-excluir-peixe:hover { opacity: 0.85; }
+.btn-reclassificar-peixe { background: var(--teal) !important; color: #fff !important; border: none; border-radius: 6px; padding: 6px 10px; font-size: 14px; cursor: pointer; flex-shrink: 0; }
+.btn-reclassificar-peixe:hover { background: var(--teal-dark) !important; }
 .proc-esgotado-label { font-size: 10px; color: var(--gray); font-style: italic; }
 .proc-custo { font-size: 11px; color: var(--gray); font-style: italic; }
 .conciliacao-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; margin: 12px 0; }
@@ -2314,9 +2404,77 @@ function renderDashboard() {
         <input type="number" id="pr_peso_gerado" step="0.1" inputmode="decimal" placeholder="Peso real do corte produzido">
       </div>
     </div>
+    <label style="font-size:11px;font-weight:600;color:var(--gray);text-transform:uppercase;letter-spacing:0.5px;display:block;margin:12px 0 8px;">
+      Fotos do processamento (opcional)
+    </label>
+    <div class="fotos-camera-row">
+      <label class="btn-foto-action">
+        📷 Tirar Foto
+        <input type="file" accept="image/*" capture="environment" multiple
+               style="display:none" onchange="handleFotoSelect3(this)">
+      </label>
+      <label class="btn-foto-action">
+        🖼️ Galeria
+        <input type="file" accept="image/*" multiple
+               style="display:none" onchange="handleFotoSelect3(this)">
+      </label>
+    </div>
+    <div class="fotos-preview-grid" id="px_fotos_preview3">
+      <div class="fotos-empty">Nenhuma foto adicionada</div>
+    </div>
     <div class="modal-actions">
       <button class="btn-cancel" onclick="hideProcessarModal()">Cancelar</button>
       <button class="btn-confirm" onclick="confirmProcessar()">Processar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════ MODAL: Adicionar Fotos / Reclassificar ════════════════ -->
+<div class="modal-overlay" id="modalAdicionarFotos" style="display:none" onclick="if(event.target===this)hideAdicionarFotosModal()">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-title">📷 Adicionar Fotos / Reclassificar</div>
+    <div class="peixe-form-grid" style="grid-template-columns:1fr 1fr;">
+      <div class="peixe-form-field">
+        <label>Qualidade</label>
+        <select id="rf_qualidade">
+          <option value="#1">#1</option>
+          <option value="#2+">#2+</option>
+          <option value="#2" selected>#2</option>
+          <option value="#2-">#2-</option>
+        </select>
+      </div>
+      <div class="peixe-form-field">
+        <label>Estrelas (1-5)</label>
+        <select id="rf_estrelas">
+          <option value="1">★☆☆☆☆</option>
+          <option value="2">★★☆☆☆</option>
+          <option value="3" selected>★★★☆☆</option>
+          <option value="4">★★★★☆</option>
+          <option value="5">★★★★★</option>
+        </select>
+      </div>
+    </div>
+    <label style="font-size:11px;font-weight:600;color:var(--gray);text-transform:uppercase;letter-spacing:0.5px;display:block;margin:12px 0 8px;">
+      Novas fotos (opcional)
+    </label>
+    <div class="fotos-camera-row">
+      <label class="btn-foto-action">
+        📷 Tirar Foto
+        <input type="file" accept="image/*" capture="environment" multiple
+               style="display:none" onchange="handleFotoSelect2(this)">
+      </label>
+      <label class="btn-foto-action">
+        🖼️ Galeria
+        <input type="file" accept="image/*" multiple
+               style="display:none" onchange="handleFotoSelect2(this)">
+      </label>
+    </div>
+    <div class="fotos-preview-grid" id="px_fotos_preview2">
+      <div class="fotos-empty">Nenhuma foto adicionada</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="hideAdicionarFotosModal()">Cancelar</button>
+      <button class="btn-confirm" onclick="saveAdicionarFotos()">Salvar</button>
     </div>
   </div>
 </div>
