@@ -974,6 +974,33 @@ async function desfazerProcessamento(procId) {
   renderDetail();
 }
 
+async function excluirPeixe(peixeId) {
+  const peixe = peixesDoLote.find(p => p.id === peixeId);
+  if (!peixe) return;
+
+  const procs = getProcessamentosDoPeixe(peixeId);
+  if (procs.length > 0) {
+    alert('Não é possível excluir — este peixe já tem processamentos registrados. Desfaça os processamentos primeiro.');
+    return;
+  }
+
+  if (peixe.status === 'vendido' || peixe.peso_restante === 0) {
+    alert('Não é possível excluir — este peixe já foi vendido.');
+    return;
+  }
+
+  if (!confirm(`Excluir o peixe lacre ${peixe.lacre}? Esta ação não pode ser desfeita.`)) return;
+
+  if (peixe.fotos && peixe.fotos.length > 0) {
+    const paths = peixe.fotos.map(url => url.split('/peixes-fotos/')[1]).filter(Boolean);
+    if (paths.length > 0) await sb.storage.from('peixes-fotos').remove(paths);
+  }
+
+  await sb.from('peixes').delete().eq('id', peixeId);
+  await loadPeixesDoLote(activeLotId);
+  renderDetail();
+}
+
 // ── STATUS HELPERS ───────────────────────────────────────────────────────────
 function statusPeixe(p) {
   const procs = getProcessamentosDoPeixe(p.id);
@@ -1328,7 +1355,11 @@ function renderInventarioPeixes() {
           <button class="btn-processar full" onclick="showProcessarModal('${p.id}')">+ Processar restante</button>
         ` : ''}
         ${procs.length > 0 ? `<div class="proc-list">${procs.map(procCardHTML).join('')}</div>` : ''}
-        ${st !== 'esgotado' ? `<button class="btn-editar-peixe-full" onclick="showEditPeixeModal('${p.id}')">✏️ Editar peixe</button>` : ''}
+        ${st !== 'esgotado' ? `
+          <div class="peixe-edit-row">
+            <button class="btn-editar-peixe-full" onclick="showEditPeixeModal('${p.id}')">✏️ Editar peixe</button>
+            ${st === 'disponivel' && procs.length === 0 ? `<button class="btn-excluir-peixe" onclick="excluirPeixe('${p.id}')">🗑</button>` : ''}
+          </div>` : ''}
       </div>
     </div>
   `;
@@ -2156,6 +2187,10 @@ function renderDashboard() {
 .btn-sm { padding: 5px 8px !important; font-size: 11px !important; width: 100%; margin-top: 4px; }
 .btn-desfazer-proc { background: var(--gray) !important; color: #fff !important; }
 .btn-desfazer-proc:hover { background: #888 !important; }
+.peixe-edit-row { display: flex; gap: 6px; align-items: center; }
+.peixe-edit-row .btn-editar-peixe-full { flex: 1; margin-top: 0; }
+.btn-excluir-peixe { background: var(--red) !important; color: #fff !important; border: none; border-radius: 6px; padding: 6px 10px; font-size: 14px; cursor: pointer; flex-shrink: 0; }
+.btn-excluir-peixe:hover { opacity: 0.85; }
 .proc-esgotado-label { font-size: 10px; color: var(--gray); font-style: italic; }
 
 /* ── Toolbar de busca/filtro ── */
